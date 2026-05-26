@@ -89,7 +89,11 @@ def _fmt_const(e) -> str:
     t, v = e["type"], e["value"]
     if t in ("f32", "f64"):
         return repr(float(v))
-    return str(int(v))
+    if t == "i64":
+        return f"(int64_t){int(v)}"
+    if t == "i32":
+        return f"(int32_t){int(v)}"
+    return str(int(v))  # i1 -> plain 0/1
 
 
 def _emit_expr(e) -> str:

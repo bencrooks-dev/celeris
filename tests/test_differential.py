@@ -1,6 +1,9 @@
 """Differential correctness harness: every available backend must agree with
 plain-Python execution for each kernel. Plain Python (the undecorated function)
 is ground truth. Backends that cannot compile a given shape are skipped."""
+import importlib.util
+import shutil
+
 import numpy as np
 import pytest
 
@@ -123,3 +126,7 @@ def test_all_backends_agree_with_python(case):
                                    err_msg=f"{name} via {be.name} backend")
         tested.append(be.name)
     assert "interpreter" in tested, f"{name}: interpreter (oracle) did not run"
+    if shutil.which("clang++") is not None:
+        assert "sourcegen" in tested, f"{name}: sourcegen failed to compile a supported kernel"
+    if importlib.util.find_spec("llvmlite") is not None:
+        assert "llvm" in tested, f"{name}: llvm failed to compile a supported kernel"

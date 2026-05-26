@@ -83,6 +83,25 @@ def test_sourcegen_malicious_name_is_sanitized():
         assert ".." not in p.name
 
 
+def test_sourcegen_floordiv_with_literal_compiles():
+    def f(n: int) -> int:
+        acc = 0
+        for i in range(n):
+            acc = acc + ((i - 5) // 2)
+        return acc
+    fn = SourceGenBackend().compile(parse_function(f))   # must NOT raise CompileError
+    assert fn(12) == sum((i - 5) // 2 for i in range(12))
+
+def test_sourcegen_mod_with_literal_compiles():
+    def f(n: int) -> int:
+        acc = 0
+        for i in range(n):
+            acc = acc + ((i - 5) % 3)
+        return acc
+    fn = SourceGenBackend().compile(parse_function(f))
+    assert fn(12) == sum((i - 5) % 3 for i in range(12))
+
+
 def test_sourcegen_int_const_returned_from_float_fn():
     def f(a: float) -> float:
         return 1
