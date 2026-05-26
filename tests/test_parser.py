@@ -70,3 +70,18 @@ def test_true_division_is_f64():
         return a / b
     irk = parse_function(f)
     assert irk["body"][-1]["value"]["type"] == "f64"
+
+
+def test_return_int_const_from_float_fn_is_cast():
+    def f() -> float:
+        return 0
+    irk = parse_function(f)
+    assert irk["body"][-1]["value"]["type"] == "f64"
+
+
+def test_cmp_result_returned_as_int_is_cast():
+    def f(a: int, b: int) -> int:
+        c = a < b
+        return c
+    irk = parse_function(f)
+    assert irk["body"][-1]["value"]["type"] == "i64"

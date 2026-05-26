@@ -64,6 +64,7 @@ class _Validator(ast.NodeVisitor):
 class _IRBuilder:
     def __init__(self) -> None:
         self.symtab: dict[str, object] = {}
+        self.ret_type: object = "void"
 
     # -- annotations
     def _annot(self, node) -> object:
@@ -91,6 +92,7 @@ class _IRBuilder:
             self.symtab[a.arg] = t
             params.append(ir.param(a.arg, t))
         ret = self._annot(fn.returns)
+        self.ret_type = ret
         body = [s for s in (self._stmt(x) for x in fn.body) if s is not None]
         return ir.kernel(fn.name, params, ret, body)
 
@@ -110,7 +112,9 @@ class _IRBuilder:
                           [x for x in (self._stmt(b) for b in s.body) if x is not None],
                           [x for x in (self._stmt(b) for b in s.orelse) if x is not None])
         if isinstance(s, ast.Return):
-            return ir.ret(self._expr(s.value) if s.value is not None else None)
+            if s.value is None:
+                return ir.ret(None)
+            return ir.ret(self._cast(self._expr(s.value), self.ret_type))
         if isinstance(s, (ast.Pass, ast.Expr)):
             return None  # docstrings / pure bare expressions: no effect in subset
         raise UnsupportedFeature(f"statement {type(s).__name__} not supported")
@@ -218,7 +222,9 @@ class _IRBuilder:
     def _cast(self, e: dict, target) -> dict:
         if e["type"] == target or target in ("void", "i1"):
             return e
-        if (is_int(e["type"]) or is_float(e["type"])) and (is_int(target) or is_float(target)):
+        src_ok = is_int(e["type"]) or is_float(e["type"]) or e["type"] == "i1"
+        tgt_ok = is_int(target) or is_float(target)
+        if src_ok and tgt_ok:
             return ir.cast(target, e)
         return e
 
