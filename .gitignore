@@ -10,3 +10,4 @@ dist/
 _skbuild/
 .DS_Store
 .venv/
+.athena-state.json
