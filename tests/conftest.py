@@ -1,7 +1,9 @@
-"""Shared pytest fixtures and skip markers for the celeris test suite.
+"""Shared pytest fixtures and capability markers for the celeris test suite.
 
-The reusable marker objects below let tests opt in to capabilities that may be
-absent in a given environment:
+The named markers below let tests opt in to capabilities that may be absent in a
+given environment. They are real, selectable markers (``-m "needs_llvmlite"``
+selects them); a ``pytest_runtest_setup`` hook skips a marked test when its
+capability is missing:
 
 - ``needs_clang``   — requires a ``clang++`` on PATH (runtime source-gen / golden kernels)
 - ``needs_llvmlite``— requires the optional ``llvmlite`` package (LLVM backend)
@@ -13,22 +15,21 @@ import shutil
 
 import pytest
 
-needs_clang = pytest.mark.skipif(
-    shutil.which("clang++") is None,
-    reason="clang++ not available",
-)
+# Named capability markers: `-m "needs_clang"` selects them; the hook skips
+# them when the capability is absent.
+needs_clang = pytest.mark.needs_clang
+needs_llvmlite = pytest.mark.needs_llvmlite
+needs_native = pytest.mark.needs_native
 
-needs_llvmlite = pytest.mark.skipif(
-    importlib.util.find_spec("llvmlite") is None,
-    reason="llvmlite not installed",
-)
-
-
-def _native_available():
-    return importlib.util.find_spec("celeris_native") is not None
+_CAP = {
+    "needs_clang": (lambda: shutil.which("clang++") is None, "clang++ not available"),
+    "needs_llvmlite": (lambda: importlib.util.find_spec("llvmlite") is None, "llvmlite not installed"),
+    "needs_native": (lambda: importlib.util.find_spec("celeris_native") is None, "celeris_native not built"),
+}
 
 
-needs_native = pytest.mark.skipif(
-    not _native_available(),
-    reason="celeris_native not built",
-)
+def pytest_runtest_setup(item):
+    for marker in item.iter_markers():
+        cap = _CAP.get(marker.name)
+        if cap and cap[0]():
+            pytest.skip(cap[1])

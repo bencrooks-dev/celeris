@@ -1,4 +1,7 @@
 import pytest, numpy as np
+
+pytestmark = pytest.mark.needs_llvmlite
+
 pytest.importorskip("llvmlite")
 from celeris.backends.llvm import LLVMBackend
 from celeris.parser import parse_function

@@ -1,5 +1,17 @@
+import pytest
+
 from celeris.backends import (register, get_backend, available_backends,
                               default_chain, PRIORITY)
+from celeris.backends import _REGISTRY
+
+
+@pytest.fixture(autouse=True)
+def _restore_registry():
+    snapshot = dict(_REGISTRY)
+    yield
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)
+
 
 class _Dummy:
     name = "dummy"

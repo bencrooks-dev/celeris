@@ -49,7 +49,7 @@ rewrite the IR before it reaches a backend.
 
 The hand-tuned kernel tier is **not** the primary codegen path — that doesn't scale. It is a
 *specialization fast-path*: a registry keyed by a normalized IR fingerprint, mapping recognized
-shapes (saxpy, dot, gemv, sum/reduction, fused elementwise) onto hand-optimized C++ templates.
+shapes (saxpy, scale, sum, dot) onto hand-optimized C++ templates.
 General source-gen is the fallback when no golden kernel matches; the pure-Python interpreter is
 the portable reference; the original Python function is the ultimate safety net.
 
