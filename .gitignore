@@ -9,3 +9,4 @@ dist/
 .celeris_cache/
 _skbuild/
 .DS_Store
+.venv/

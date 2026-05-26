@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "celeris"
+version = "0.1.0"
+description = "A readable, restricted re-implementation of the Numba architecture: a JIT compiler for a numeric subset of Python."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Ben Crooks" }]
+
+[project.optional-dependencies]
+llvm = ["llvmlite>=0.42"]
+native = ["pybind11>=2.11"]
+dev = ["pytest>=8", "numpy>=1.24", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "needs_clang: requires a clang++ compiler on PATH",
+    "needs_llvmlite: requires the optional llvmlite package",
+    "needs_native: requires the CMake-built celeris_native module",
+]
