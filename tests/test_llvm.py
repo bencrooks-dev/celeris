@@ -1,4 +1,5 @@
-import pytest, numpy as np
+import pytest
+import numpy as np
 
 pytestmark = pytest.mark.needs_llvmlite
 

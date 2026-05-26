@@ -1,4 +1,8 @@
-import pytest, subprocess, ctypes, pathlib, json
+import pytest
+import subprocess
+import ctypes
+import pathlib
+import json
 import numpy as np
 from conftest import needs_clang
 

@@ -1,4 +1,5 @@
-import pytest, numpy as np
+import pytest
+import numpy as np
 from celeris.backends.sourcegen import SourceGenBackend
 from celeris.parser import parse_function
 from celeris.types import F64Array
@@ -46,7 +47,8 @@ def test_sourcegen_available():
     assert SourceGenBackend().available() is True  # clang present in this env
 
 def test_sourcegen_malicious_name_is_sanitized():
-    import os, pathlib
+    import os
+    import pathlib
     import celeris.ir as ir
     from celeris.backends.sourcegen import _CACHE, _safe_name
 

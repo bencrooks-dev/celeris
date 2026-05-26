@@ -159,7 +159,8 @@ class _IRBuilder:
         if not isinstance(s.target, ast.Name):
             raise UnsupportedFeature("for-target must be a single name")
         args = s.iter.args
-        ci = lambda v: ir.const("i64", v)
+        def ci(v):
+            return ir.const("i64", v)
         if len(args) == 1:
             start, stop, step = ci(0), self._expr(args[0]), ci(1)
         elif len(args) == 2:

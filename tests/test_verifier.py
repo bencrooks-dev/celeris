@@ -1,4 +1,5 @@
-import pytest, celeris.ir as ir
+import pytest
+import celeris.ir as ir
 from celeris.verifier import verify_ir
 from celeris.errors import VerifyError
 

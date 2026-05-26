@@ -60,7 +60,7 @@ def test_while_and_if():
 def test_augassign_undefined_name_raises():
     from celeris.errors import CelerisError
     def bad(n: int) -> int:
-        x += 1
+        x += 1  # noqa: F821
         return x
     with pytest.raises(CelerisError):
         parse_function(bad)

@@ -1,4 +1,5 @@
-import pytest, numpy as np
+import pytest
+import numpy as np
 from celeris.backends.kernels import KernelBackend, REGISTRY
 from celeris.parser import parse_function
 from celeris.types import F64Array
