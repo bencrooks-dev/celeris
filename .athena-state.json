@@ -1,0 +1,7 @@
+{
+  "phase": "planned",
+  "plan": "docs/plans/2026-05-26-celeris-jit-compiler.md",
+  "planId": "plan:celeris-jit",
+  "wave": { "current": 0, "total": 9 },
+  "tasks": { "completed": 0, "total": 22 }
+}
