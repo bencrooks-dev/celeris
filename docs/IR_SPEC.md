@@ -31,7 +31,7 @@ written `{"ptr": <scalar>}`, e.g. `{"ptr": "f64"}`.
 | **augassign** | `{"op": "augassign", "binop": str, "target": <LValue>, "value": <Expr>}` |
 | **for** | `{"op": "for", "var": str, "start": <Expr>, "stop": <Expr>, "step": <Expr>, "body": [<Stmt>, ...]}` |
 | **while** | `{"op": "while", "cond": <Expr>, "body": [<Stmt>, ...]}` |
-| **if** | `{"op": "if", "cond": <Expr>, "then": [<Stmt>, ...], "els": [<Stmt>, ...]}` |
+| **if** | `{"op": "if", "cond": <Expr>, "then": [<Stmt>, ...], "else": [<Stmt>, ...]}` |
 | **return** | `{"op": "return", "value": <Expr> | null}` |
 
 ## L-values (`"k"`, assignable)
@@ -52,13 +52,15 @@ The `index` target's `array` must name a parameter/local of type `{"ptr": T}`, a
 | **var** | `{"k": "var", "type": <type>, "name": str}` |
 | **index** | `{"k": "index", "type": <scalar>, "array": str, "index": <Expr>}` |
 | **binop** | `{"k": "binop", "op": str, "type": <scalar>, "lhs": <Expr>, "rhs": <Expr>}` |
-| **cmp** | `{"k": "cmp", "op": str, "type": "i64", "lhs": <Expr>, "rhs": <Expr>}` |
-| **bool** | `{"k": "bool", "op": "and" | "or", "type": "i64", "args": [<Expr>, ...]}` |
+| **cmp** | `{"k": "cmp", "op": str, "type": "i1", "lhs": <Expr>, "rhs": <Expr>}` |
+| **bool** | `{"k": "bool", "op": "and" | "or" | "not", "type": "i1", "args": [<Expr>, ...]}` |
 | **call** | `{"k": "call", "fn": str, "type": <scalar>, "args": [<Expr>, ...]}` |
 | **cast** | `{"k": "cast", "type": <scalar>, "value": <Expr>}` |
 
 `binop` operands must unify to the node's `type` (see `types.unify_numeric`: any float operand
-promotes to `f64`, an all-int mix to `i64`). `op` is one of `+ - * / // % **`. `cmp` `op` is one
+promotes to `f64`, an all-int mix to `i64`). `op` is one of `+ - * / // % **`. `/` is true
+division and always yields `f64` (Python semantics); `//` is floor division and `%` is floored
+modulo (sign follows divisor). `cmp` `op` is one
 of `< <= > >= == !=` and yields an integer truth value. `call` `fn` must be in the intrinsic
 whitelist (`sqrt`, `exp`, `log`, `sin`, `cos`, `fabs`, `floor`, `fmax`, `fmin`, `len`) with the
 correct arity.

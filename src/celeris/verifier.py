@@ -270,7 +270,9 @@ def _verify_expr(e, syms):
         rt = _verify_expr(e["rhs"], syms)
         if not _is_value_type(lt) or not _is_value_type(rt):
             raise VerifyError(f"binop operands must be numeric, got {lt!r}, {rt!r}")
-        expected = unify_numeric(lt, rt)
+        # '/' is true division (Python semantics) and always yields f64, even
+        # over int operands. All other arithmetic ops ('+ - * // % **') unify.
+        expected = "f64" if e.get("op") == "/" else unify_numeric(lt, rt)
         if e["type"] != expected:
             raise VerifyError(
                 f"binop result type {e['type']!r} should be {expected!r} for {lt!r} op {rt!r}")

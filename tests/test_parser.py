@@ -64,3 +64,9 @@ def test_augassign_undefined_name_raises():
         return x
     with pytest.raises(CelerisError):
         parse_function(bad)
+
+def test_true_division_is_f64():
+    def f(a: int, b: int) -> float:
+        return a / b
+    irk = parse_function(f)
+    assert irk["body"][-1]["value"]["type"] == "f64"

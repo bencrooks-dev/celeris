@@ -270,3 +270,8 @@ def test_cmp_over_scalars_still_passes():
     k = ir.kernel("k", [ir.param("a","i64"), ir.param("b","i64")], "void",
         [ir.if_(ir.cmp("<", ir.var("a","i64"), ir.var("b","i64")), [], [])])
     verify_ir(k)  # no raise
+
+def test_true_division_f64_passes():
+    k = ir.kernel("k", [ir.param("a","i64"), ir.param("b","i64")], "f64",
+        [ir.ret(ir.binop("/","f64", ir.var("a","i64"), ir.var("b","i64")))])
+    verify_ir(k)  # no raise (true division typed f64 over int operands is valid)

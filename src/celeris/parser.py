@@ -188,6 +188,10 @@ class _IRBuilder:
         if isinstance(e, ast.BinOp):
             l, r = self._expr(e.left), self._expr(e.right)
             ty = unify_numeric(l["type"], r["type"])
+            # '/' is true division (Python semantics): result is always f64,
+            # and operands are cast to f64 by the _cast calls below.
+            if _BINOP[type(e.op)] == "/":
+                ty = "f64"
             return ir.binop(_BINOP[type(e.op)], ty, self._cast(l, ty), self._cast(r, ty))
         if isinstance(e, ast.UnaryOp):
             v = self._expr(e.operand)
