@@ -96,3 +96,21 @@ def test_interpreter_step_zero_raises():
     from celeris.backends.interpreter import InterpreterBackend
     with pytest.raises(ValueError):
         InterpreterBackend().compile(ir)()
+
+def test_interpreter_2d_index():
+    import celeris.ir as ir
+    import numpy as np
+
+    from celeris.backends.interpreter import InterpreterBackend
+    # y[i] = a[i,0] + a[i,1]
+    body = [ir.for_("i", ir.const("i64",0), ir.var("m","i64"), ir.const("i64",1),
+        [ir.assign(ir.lval_index("y", ir.var("i","i64"), "f64"),
+            ir.binop("+","f64",
+                ir.index_nd("a", [ir.var("i","i64"), ir.const("i64",0)], "f64"),
+                ir.index_nd("a", [ir.var("i","i64"), ir.const("i64",1)], "f64")))])]
+    k = ir.kernel("k", [ir.param("a",{"ptr":"f64","ndim":2}), ir.param("y",{"ptr":"f64"}), ir.param("m","i64")], "void", body)
+    fn = InterpreterBackend().compile(k)
+    a = np.arange(6, dtype=np.float64).reshape(3, 2)
+    y = np.zeros(3, dtype=np.float64)
+    fn(a, y, 3)
+    np.testing.assert_allclose(y, a[:, 0] + a[:, 1])
