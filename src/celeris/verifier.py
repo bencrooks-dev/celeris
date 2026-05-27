@@ -11,7 +11,7 @@ construct; a clean kernel returns ``None``.
 """
 
 from .errors import VerifyError
-from .types import is_int, unify_numeric
+from .types import is_int, ndim_of, unify_numeric
 
 #: Scalar type vocabulary the IR may carry. ``"void"`` marks the absence of a
 #: value and is *not* a valid value/element type.
@@ -37,8 +37,16 @@ def _is_int_type(t) -> bool:
 
 
 def _is_ptr(t) -> bool:
-    """True if ``t`` is a pointer type ``{"ptr": <scalar>}``."""
-    return isinstance(t, dict) and set(t.keys()) == {"ptr"}
+    """True if ``t`` is a pointer type ``{"ptr": <scalar>}`` (1-D) or
+    ``{"ptr": <scalar>, "ndim": N}`` (N-D, ``N`` an int >= 1)."""
+    if not (isinstance(t, dict) and "ptr" in t):
+        return False
+    keys = set(t.keys())
+    if keys == {"ptr"}:
+        return True
+    if keys == {"ptr", "ndim"}:
+        return isinstance(t["ndim"], int) and not isinstance(t["ndim"], bool) and t["ndim"] >= 1
+    return False
 
 
 def _is_value_type(t) -> bool:
@@ -217,7 +225,7 @@ def _verify_lvalue(lv, syms) -> None:
 
 
 def _verify_index_node(node, syms, what) -> None:
-    """Shared check for ``index`` expressions and l-values."""
+    """Shared check for ``index`` expressions and l-values (1-D and N-D)."""
     array = node.get("array")
     if not isinstance(array, str):
         raise VerifyError(f"{what} missing string 'array'")
@@ -230,8 +238,28 @@ def _verify_index_node(node, syms, what) -> None:
     if node["type"] != elem:
         raise VerifyError(
             f"{what} element type {node['type']!r} does not match pointer element {elem!r}")
+    ndim = ndim_of(arr_t)
+
+    if "indices" in node:
+        # N-D index: arity must equal the array's ndim; each index int-typed.
+        indices = node["indices"]
+        if not isinstance(indices, list):
+            raise VerifyError(f"{what} 'indices' must be a list")
+        if len(indices) != ndim:
+            raise VerifyError(
+                f"{what} into {ndim}-D array '{array}' has {len(indices)} index(es)")
+        for ix in indices:
+            idx_t = _verify_expr(ix, syms)
+            if not _is_int_type(idx_t):
+                raise VerifyError(f"{what} subscript must be int-typed, got {idx_t!r}")
+        return
+
+    # 1-D index: a single 'index' sub-expression; the array must be 1-D.
     if "index" not in node:
         raise VerifyError(f"{what} missing 'index' sub-expression")
+    if ndim != 1:
+        raise VerifyError(
+            f"{what} into {ndim}-D array '{array}' requires {ndim} indices")
     idx_t = _verify_expr(node["index"], syms)
     if not _is_int_type(idx_t):
         raise VerifyError(f"{what} subscript must be int-typed, got {idx_t!r}")

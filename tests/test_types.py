@@ -39,3 +39,15 @@ def test_predicates():
     assert is_int("i32") and is_int("i64")
     assert not is_float("i64")
     assert not is_int("f64")
+
+
+def test_array2d_annotations():
+    from celeris.types import annotation_to_type
+    assert annotation_to_type("F64Array2D") == {"ptr": "f64", "ndim": 2}
+    assert annotation_to_type("I64Array2D") == {"ptr": "i64", "ndim": 2}
+
+
+def test_ndim_of():
+    from celeris.types import ndim_of
+    assert ndim_of({"ptr": "f64"}) == 1
+    assert ndim_of({"ptr": "f64", "ndim": 2}) == 2
