@@ -259,6 +259,9 @@ class LLVMBackend:
     def compile(self, ir: dict):
         if not _HAVE:
             raise CompileError("llvmlite not installed")
+        from ..ir import has_parallel_loop
+        if has_parallel_loop(ir):
+            raise CompileError("llvm backend runs serial; deferring parallel loop to source-gen")
         try:
             _ensure()
             module = lir.Module(name="celeris")

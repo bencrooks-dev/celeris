@@ -107,3 +107,40 @@ def test_sourcegen_int_const_returned_from_float_fn():
         return 1
     fn = SourceGenBackend().compile(parse_function(f))
     assert abs(fn(2.0) - 1.0) < 1e-9
+
+
+def test_sourcegen_prange_threaded_correct():
+    from celeris.types import prange
+    def psaxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = a * x[i] + y[i]
+    n = 8192
+    fn = SourceGenBackend().compile(parse_function(psaxpy))
+    x = np.arange(n, dtype=np.float64); y = np.ones(n, dtype=np.float64)
+    fn(2.0, x, y, n)
+    np.testing.assert_allclose(y, 2.0 * np.arange(n) + 1.0)
+
+
+def test_sourcegen_prange_emits_threads_for_large_independent():
+    from celeris.backends.sourcegen import emit_cpp
+    from celeris.types import prange
+    def psaxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = a * x[i] + y[i]
+    src = emit_cpp(parse_function(psaxpy))
+    assert "std::thread" in src and "join" in src
+
+
+def test_sourcegen_prange_reduction_stays_serial():
+    from celeris.backends.sourcegen import emit_cpp
+    from celeris.types import prange
+    def psum(x: F64Array, n: int) -> float:
+        acc = 0.0
+        for i in prange(n):
+            acc = acc + x[i]
+        return acc
+    src = emit_cpp(parse_function(psum))
+    assert "std::thread" not in src          # reduction -> not parallelized
+    fn = SourceGenBackend().compile(parse_function(psum))
+    x = np.arange(100, dtype=np.float64)
+    assert abs(fn(x, 100) - x.sum()) < 1e-9  # serial fallback correct

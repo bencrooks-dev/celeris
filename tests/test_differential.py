@@ -174,3 +174,43 @@ def test_shifted_chain_is_fused():
     k = optimize(parse_function(shifted_chain))
     fors = [s for s in k["body"] if s["op"] == "for"]
     assert len(fors) == 1 and len(fors[0]["body"]) == 2
+
+
+def test_prange_parallel_matches_serial_oracle():
+    from celeris.types import prange
+    from celeris.parser import parse_function
+    from celeris.verifier import verify_ir
+    from celeris.passes import optimize
+    from celeris.backends.interpreter import InterpreterBackend
+    from celeris.backends.sourcegen import SourceGenBackend
+    import shutil
+    def psaxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = a * x[i] + y[i]
+    n = 8192
+    k = parse_function(psaxpy); verify_ir(k); k = optimize(k)
+    def run(fn):
+        x = np.arange(n, dtype=np.float64); y = np.ones(n, dtype=np.float64)
+        fn(2.0, x, y, n); return y
+    expected = run(psaxpy)                               # plain-Python serial oracle
+    np.testing.assert_allclose(run(InterpreterBackend().compile(k)), expected, atol=1e-9)
+    if shutil.which("clang++"):
+        np.testing.assert_allclose(run(SourceGenBackend().compile(k)), expected, atol=1e-9)
+
+
+def test_prange_reduction_serial_fallback_correct():
+    from celeris.types import prange
+    from celeris.parser import parse_function
+    from celeris.backends.sourcegen import SourceGenBackend
+    import shutil
+    import pytest as _pt
+    if not shutil.which("clang++"):
+        _pt.skip("clang++ not available")
+    def psum(x: F64Array, n: int) -> float:
+        acc = 0.0
+        for i in prange(n):
+            acc = acc + x[i]
+        return acc
+    fn = SourceGenBackend().compile(parse_function(psum))
+    x = np.arange(500, dtype=np.float64)
+    assert abs(fn(x, 500) - x.sum()) < 1e-9

@@ -16,6 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Nothing yet.
 
+## [0.4.0] - 2026-05-27
+
+### Added
+- `prange` parallel loops. Writing `for i in prange(n):` parses identically to `range` but
+  marks the `for` IR node `parallel: true` — a hint, not a guarantee. The C++ source-gen
+  backend executes a `prange` loop with `std::thread` chunking **only** when it can prove the
+  loop is independent: unit positive step (`step == 1`), no `return` in the body, no scalar
+  writes (so no reductions or loop-carried temporaries), and every array *write* indexed at
+  exactly `i`. When all hold and the trip count is at least 4096 iterations, the loop body is
+  split into contiguous chunks across up to 8 worker threads (`std::thread::hardware_concurrency`,
+  clamped); below 4096 iterations it runs the same body serially to avoid thread overhead. Any
+  loop that fails the independence predicate — reductions, offset writes (`y[i+1] = …`),
+  non-unit step, or a `return` body — falls back to a normal serial loop, so it is correct by
+  construction. The pure-Python interpreter runs every `prange` loop serially and is the
+  oracle the differential harness checks the threaded source-gen output against. The
+  golden-kernel and llvm backends **decline** parallel loops (kernels' `matches` returns
+  `False`; llvm raises `CompileError`), so a `prange` kernel routes to the threaded source-gen
+  path. Loop fusion only merges two loops when their `parallel` flags match.
+
+### Changed
+- The C++ source-gen prelude now includes `<thread>`, `<vector>`, and `<algorithm>`, and the
+  runtime `clang++` invocation passes `-pthread`, to support the threaded `prange` codegen.
+
 ## [0.3.0] - 2026-05-27
 
 ### Changed
@@ -65,7 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Differential correctness harness cross-checking every available backend against pure Python,
   a benchmark suite, runnable examples, and GitHub Actions CI.
 
-[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bencrooks-dev/celeris/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bencrooks-dev/celeris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bencrooks-dev/celeris/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bencrooks-dev/celeris/releases/tag/v0.1.0

@@ -66,3 +66,13 @@ def test_llvm_cmp_assigned_then_returned():
         return c
     fn = LLVMBackend().compile(parse_function(f))
     assert fn(1, 2) == 1 and fn(2, 1) == 0
+
+
+def test_llvm_declines_parallel_loops():
+    from celeris.types import prange
+    from celeris.errors import CompileError
+    def psaxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = a * x[i] + y[i]
+    with pytest.raises(CompileError):
+        LLVMBackend().compile(parse_function(psaxpy))

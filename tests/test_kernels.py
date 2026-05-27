@@ -63,3 +63,10 @@ def test_unknown_shape_returns_bool_and_compile_raises():
     if not be.matches(ir):
         with pytest.raises(CompileError):
             be.compile(ir)
+
+def test_kernels_declines_parallel_loops():
+    from celeris.types import prange
+    def psaxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = a * x[i] + y[i]
+    assert KernelBackend().matches(parse_function(psaxpy)) is False

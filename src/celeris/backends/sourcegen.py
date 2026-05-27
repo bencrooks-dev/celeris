@@ -19,6 +19,7 @@ import subprocess
 from . import register
 from .. import ir as _ir
 from ..errors import CompileError
+from ..passes import _collect, _has_return
 
 
 def _safe_name(name: str) -> str:
@@ -42,6 +43,9 @@ _CACHE = pathlib.Path(os.path.expanduser("~/.celeris_cache"))
 _PRELUDE = """\
 #include <cmath>
 #include <cstdint>
+#include <thread>
+#include <vector>
+#include <algorithm>
 
 template <class T> static inline T celeris_floordiv(T a, T b) {
     return static_cast<T>(std::floor(static_cast<double>(a) / static_cast<double>(b)));
@@ -141,6 +145,56 @@ def _emit_lval(t) -> str:
     return f"{t['array']}[{_emit_expr(t['index'])}]"
 
 
+def _is_parallelizable(node) -> bool:
+    if not node.get("parallel", False):
+        return False
+    step = node["step"]
+    if not (step.get("k") == "const" and isinstance(step.get("value"), int) and step["value"] == 1):
+        return False
+    if _has_return(node["body"]):
+        return False
+    var = node["var"]
+    _arr_w, accesses, s_writes, _s_reads = _collect(node["body"], var)
+    if s_writes:                       # no scalar writes (no temps/reductions)
+        return False
+    for arr, idx, is_write in accesses:
+        if is_write and not (idx.get("k") == "var" and idx.get("name") == var):
+            return False               # writes must be at exactly i
+    return True
+
+
+def _emit_parallel_for(s, ind):
+    v = s["var"]
+    st, sp = _emit_expr(s["start"]), _emit_expr(s["stop"])
+    body = _emit_stmts(s["body"], ind + "            ")
+    return "\n".join([
+        f"{ind}{{",
+        f"{ind}  const int64_t _lo = {st}, _hi = {sp};",
+        f"{ind}  if (_hi - _lo < 4096) {{",
+        f"{ind}    for (int64_t {v} = _lo; {v} < _hi; ++{v}) {{",
+        body,
+        f"{ind}    }}",
+        f"{ind}  }} else {{",
+        f"{ind}    unsigned _nt = std::thread::hardware_concurrency();",
+        f"{ind}    if (_nt == 0u) _nt = 1u; if (_nt > 8u) _nt = 8u;",
+        f"{ind}    int64_t _chunk = (_hi - _lo + (int64_t)_nt - 1) / (int64_t)_nt;",
+        f"{ind}    std::vector<std::thread> _ths;",
+        f"{ind}    for (unsigned _t = 0u; _t < _nt; ++_t) {{",
+        f"{ind}      int64_t _a = _lo + (int64_t)_t * _chunk;",
+        f"{ind}      int64_t _b = std::min(_a + _chunk, _hi);",
+        f"{ind}      if (_a >= _b) break;",
+        f"{ind}      _ths.emplace_back([=]() {{",
+        f"{ind}        for (int64_t {v} = _a; {v} < _b; ++{v}) {{",
+        body,
+        f"{ind}        }}",
+        f"{ind}      }});",
+        f"{ind}    }}",
+        f"{ind}    for (auto& _th : _ths) _th.join();",
+        f"{ind}  }}",
+        f"{ind}}}",
+    ])
+
+
 def _emit_stmts(stmts, ind="    ") -> str:
     out = []
     for s in stmts:
@@ -157,11 +211,14 @@ def _emit_stmts(stmts, ind="    ") -> str:
                      "rhs": s["value"]}
             out.append(f"{ind}{lv} = {_emit_expr(synth)};")
         elif op == "for":
-            st, sp, stp = _emit_expr(s["start"]), _emit_expr(s["stop"]), _emit_expr(s["step"])
-            v = s["var"]
-            out.append(f"{ind}for ({v} = {st}; (({stp}) > 0 ? {v} < ({sp}) : {v} > ({sp})); {v} += ({stp})) {{")
-            out.append(_emit_stmts(s["body"], ind + "    "))
-            out.append(f"{ind}}}")
+            if _is_parallelizable(s):
+                out.append(_emit_parallel_for(s, ind))
+            else:
+                st, sp, stp = _emit_expr(s["start"]), _emit_expr(s["stop"]), _emit_expr(s["step"])
+                v = s["var"]
+                out.append(f"{ind}for ({v} = {st}; (({stp}) > 0 ? {v} < ({sp}) : {v} > ({sp})); {v} += ({stp})) {{")
+                out.append(_emit_stmts(s["body"], ind + "    "))
+                out.append(f"{ind}}}")
         elif op == "while":
             out.append(f"{ind}while ({_emit_expr(s['cond'])}) {{")
             out.append(_emit_stmts(s["body"], ind + "    "))
@@ -211,7 +268,7 @@ class SourceGenBackend:
             cpp.write_text(src)
             cc = shutil.which("clang++") or "clang++"
             r = subprocess.run([cc, "-O3", "-std=c++17", "-fPIC", "-shared",
-                                "-march=native", str(cpp), "-o", str(so)],
+                                "-march=native", "-pthread", str(cpp), "-o", str(so)],
                                capture_output=True, text=True)
             if r.returncode != 0:
                 raise CompileError(f"clang++ failed:\n{r.stderr}\n--- source ---\n{src}")

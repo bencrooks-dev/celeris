@@ -44,7 +44,9 @@ Inside a `@fast_runtime`-decorated region, celeris supports:
 - **Numeric scalars** — `i32`, `i64`, `f32`, `f64` (Python `int` → `i64`, `float` → `f64`).
 - **Typed 1-D arrays** — `F64Array`, `F32Array`, `I64Array`, `I32Array` (NumPy or any
   buffer supporting `__getitem__`/`__setitem__`).
-- **Control flow** — `for i in range(...)`, `while`, `if`/`else`.
+- **Control flow** — `for i in range(...)`, `while`, `if`/`else`. `for i in prange(...)` is a
+  *parallel hint*: it parses identically to `range` but lets the source-gen backend thread the
+  loop when it is provably independent (see **Parallelism** below).
 - **Arithmetic** — `+ - * / // % **`, comparisons, and boolean ops. Division follows
   Python semantics: `/` is true division and always yields `f64`; `//` is floor division;
   `%` is floored modulo (the sign follows the divisor, matching CPython, not C).
@@ -118,6 +120,35 @@ declines forward-read dependences (`t[i]` then `t[i+1]`), variable offsets (`a[i
 non-unit-step loops. See [docs/ROADMAP.md](docs/ROADMAP.md) for what fusion does *not* yet
 cover (variable-offset and non-unit-step fusion, tiling). We ship no fabricated benchmark
 numbers; run `benchmarks/benchmark.py` on your own hardware.
+
+## Parallelism
+
+`for i in prange(n):` is a hint that a loop's iterations are independent and may run in
+parallel. As of v0.4.0 the C++ source-gen backend acts on that hint with `std::thread`
+chunking — but only when it can *prove* the loop is independent, so the result is always
+identical to running it serially:
+
+```python
+@fast_runtime
+def saxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
+    for i in prange(n):          # threaded by source-gen when n >= 4096
+        y[i] = a * x[i] + y[i]
+```
+
+The independence predicate is deliberately strict: the loop must have unit positive step,
+no `return`, no scalar writes (so **no reductions or loop-carried temporaries**), and every
+array write indexed at exactly `i`. When all of those hold and the trip count is at least
+4096 iterations, the body is split into contiguous chunks across up to 8 worker threads;
+below that it runs serially to avoid thread overhead. Anything that fails the predicate —
+a reduction (`acc = acc + x[i]`), an offset write (`y[i+1] = …`), a non-unit step, or a
+`return` body — quietly falls back to a normal serial loop, **correct, just not threaded**.
+
+Being honest about the scope: only embarrassingly-parallel, elementwise loops are threaded
+today. Parallel reductions are not yet supported (an `acc = acc + x[i]` loop stays serial),
+and there is no OpenMP or GPU backend. The pure-Python interpreter runs every `prange` loop
+serially (it is the reference oracle); the golden-kernel and llvm backends decline parallel
+loops so a `prange` kernel routes to the threaded source-gen path. Correctness is enforced by the
+differential harness, which checks the threaded output against the serial interpreter oracle.
 
 ## Comparison to Numba
 

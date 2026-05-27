@@ -21,6 +21,7 @@ from typing import Callable, Optional
 
 from . import register
 from .. import ir as _ir
+from ..ir import has_parallel_loop
 from ..errors import CompileError
 from .sourcegen import (_CACHE, _collect_locals, _cty, _ctypes_for, _emit_stmts,
                         _PRELUDE, _safe_name)
@@ -164,6 +165,9 @@ class KernelBackend:
         return shutil.which("clang++") is not None
 
     def matches(self, ir: dict) -> bool:
+        # Parallel loops fall through to source-gen's threaded path.
+        if has_parallel_loop(ir):
+            return False
         return any(g.matches(ir) for g in REGISTRY.values())
 
     def compile(self, ir: dict):

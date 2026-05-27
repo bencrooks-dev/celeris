@@ -14,6 +14,12 @@ name to its internal representation.
 
 from .errors import UnsupportedFeature
 
+#: Runtime alias so kernel source using ``prange`` is importable/defines cleanly.
+#: ``prange`` is a parallel-loop hint that parses identically to ``range``; the
+#: compiler treats it specially (the parser sets ``parallel=True`` on the ``for``
+#: IR node). At plain-Python runtime it behaves exactly like ``range``.
+prange = range
+
 
 # --- annotation marker classes -------------------------------------------------
 # These exist only to be referenced as type annotations in user source. They are

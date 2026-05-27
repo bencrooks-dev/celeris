@@ -336,6 +336,8 @@ def _can_fuse(f1, f2) -> bool:
     if not (f1["var"] == f2["var"] and f1["start"] == f2["start"]
             and f1["stop"] == f2["stop"] and f1["step"] == f2["step"]):
         return False                                  # (1) iteration space
+    if f1.get("parallel", False) != f2.get("parallel", False):
+        return False                                  # (1) matching parallel flag
     var = f1["var"]
     if _has_return(f1["body"]) or _has_return(f2["body"]):
         return False                                  # (3) no return
