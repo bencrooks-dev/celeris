@@ -43,6 +43,9 @@ _CT = {"i1": ctypes.c_int, "i32": ctypes.c_int32, "i64": ctypes.c_int64,
 def _is_int(t): return t in ("i1", "i32", "i64")
 def _is_float(t): return t in ("f32", "f64")
 
+def _ndim_of(t):
+    return t.get("ndim", 1) if isinstance(t, dict) and "ptr" in t else 0
+
 def _lty(t):
     if isinstance(t, dict) and "ptr" in t:
         return lir.PointerType(_lty(t["ptr"]))
@@ -72,8 +75,27 @@ def _collect_locals(stmts, params, out):
 
 
 class _Lowerer:
-    def __init__(self, b, func, slots, module):
+    def __init__(self, b, func, slots, module, strides=None):
         self.b, self.func, self.slots, self.module = b, func, slots, module
+        # strides: maps (array_name, dim) -> i64 SSA value (stride in elements)
+        self.strides = strides or {}
+
+    def _index_ptr(self, e):
+        """gep the data pointer of an index node by its flat element offset."""
+        slot, sty = self.slots[e["array"]]
+        ety = _lty(sty["ptr"])
+        base = self.b.load(slot, typ=_lty(sty))
+        if "indices" in e:
+            i64 = lir.IntType(64)
+            off = None
+            for d, ix in enumerate(e["indices"]):
+                idx = self.eval(ix)
+                if idx.type != i64:
+                    idx = self.b.sext(idx, i64) if idx.type.width < 64 else self.b.trunc(idx, i64)
+                term = self.b.mul(idx, self.strides[(e["array"], d)])
+                off = term if off is None else self.b.add(off, term)
+            return self.b.gep(base, [off], inbounds=True, source_etype=ety), ety
+        return self.b.gep(base, [self.eval(e["index"])], inbounds=True, source_etype=ety), ety
 
     def emit_block(self, stmts):
         for s in stmts:
@@ -106,10 +128,7 @@ class _Lowerer:
         if k == "var":
             slot, sty = self.slots[e["name"]]; return self.b.load(slot, typ=_lty(sty))
         if k == "index":
-            slot, sty = self.slots[e["array"]]
-            ety = _lty(sty["ptr"])
-            base = self.b.load(slot, typ=_lty(sty))
-            ptr = self.b.gep(base, [self.eval(e["index"])], inbounds=True, source_etype=ety)
+            ptr, ety = self._index_ptr(e)
             return self.b.load(ptr, typ=ety)
         if k == "binop":
             return self.binop(e["op"], t, self.eval(e["lhs"]), self.eval(e["rhs"]))
@@ -199,19 +218,13 @@ class _Lowerer:
         if t["k"] == "var":
             slot, _ = self.slots[t["name"]]; self.b.store(val, slot)
         else:
-            slot, sty = self.slots[t["array"]]
-            ety = _lty(sty["ptr"])
-            base = self.b.load(slot, typ=_lty(sty))
-            ptr = self.b.gep(base, [self.eval(t["index"])], inbounds=True, source_etype=ety)
+            ptr, _ = self._index_ptr(t)
             self.b.store(val, ptr)
 
     def load_lval(self, t):
         if t["k"] == "var":
             slot, sty = self.slots[t["name"]]; return self.b.load(slot, typ=_lty(sty))
-        slot, sty = self.slots[t["array"]]
-        ety = _lty(sty["ptr"])
-        base = self.b.load(slot, typ=_lty(sty))
-        ptr = self.b.gep(base, [self.eval(t["index"])], inbounds=True, source_etype=ety)
+        ptr, ety = self._index_ptr(t)
         return self.b.load(ptr, typ=ety)
 
     def emit_for(self, s):
@@ -265,19 +278,38 @@ class LLVMBackend:
         try:
             _ensure()
             module = lir.Module(name="celeris")
-            fnty = lir.FunctionType(_lty(ir["ret"]), [_lty(p["type"]) for p in ir["params"]])
+            i64 = lir.IntType(64)
+            # Expand each ndim>=2 array param into one pointer arg + ndim i64 stride args.
+            argtys = []
+            for p in ir["params"]:
+                t = p["type"]; nd = _ndim_of(t)
+                if nd >= 2:
+                    argtys.append(_lty(t)); argtys += [i64] * nd
+                else:
+                    argtys.append(_lty(t))
+            fnty = lir.FunctionType(_lty(ir["ret"]), argtys)
             func = lir.Function(module, fnty, name=ir["name"])
             b = lir.IRBuilder(func.append_basic_block("entry"))
             slots = {}
-            for p, arg in zip(ir["params"], func.args):
+            strides = {}
+            ai = iter(func.args)
+            for p in ir["params"]:
+                t = p["type"]; nd = _ndim_of(t)
+                arg = next(ai)
                 arg.name = p["name"]
-                slot = b.alloca(_lty(p["type"]), name=p["name"]); b.store(arg, slot)
-                slots[p["name"]] = (slot, p["type"])
+                slot = b.alloca(_lty(t), name=p["name"]); b.store(arg, slot)
+                slots[p["name"]] = (slot, t)
+                if nd >= 2:
+                    for d in range(nd):
+                        sarg = next(ai)
+                        sarg.name = f"{p['name']}_s{d}"
+                        sslot = b.alloca(i64, name=sarg.name); b.store(sarg, sslot)
+                        strides[(p["name"], d)] = b.load(sslot, typ=i64)
             locs = {}
             _collect_locals(ir["body"], {p["name"] for p in ir["params"]}, locs)
             for n, t in locs.items():
                 slots[n] = (b.alloca(_lty(t), name=n), t)
-            lw = _Lowerer(b, func, slots, module)
+            lw = _Lowerer(b, func, slots, module, strides)
             lw.emit_block(ir["body"])
             if not b.block.is_terminated:
                 b.ret_void() if isinstance(fnty.return_type, lir.VoidType) else b.ret(lir.Constant(fnty.return_type, 0))
@@ -297,11 +329,27 @@ class LLVMBackend:
         ee = llvm.create_mcjit_compiler(mod, tm)
         ee.finalize_object(); ee.run_static_constructors()
         addr = ee.get_function_address(ir["name"])
-        cfty = ctypes.CFUNCTYPE(_ct(ir["ret"]), *[_ct(p["type"]) for p in ir["params"]])
+        cargtys = []
+        for p in ir["params"]:
+            t = p["type"]; nd = _ndim_of(t)
+            if nd >= 2:
+                cargtys.append(_ct(t)); cargtys += [ctypes.c_int64] * nd
+            else:
+                cargtys.append(_ct(t))
+        cfty = ctypes.CFUNCTYPE(_ct(ir["ret"]), *cargtys)
         cfn = cfty(addr); ptypes = [p["type"] for p in ir["params"]]
 
         def call(*args):
-            cargs = [(a.ctypes.data_as(_ct(t)) if isinstance(t, dict) and "ptr" in t else a) for t, a in zip(ptypes, args)]
+            cargs = []
+            for t, a in zip(ptypes, args):
+                nd = _ndim_of(t)
+                if nd >= 2:
+                    cargs.append(a.ctypes.data_as(_ct(t)))
+                    cargs += [ctypes.c_int64(a.strides[d] // a.itemsize) for d in range(nd)]
+                elif isinstance(t, dict) and "ptr" in t:
+                    cargs.append(a.ctypes.data_as(_ct(t)))
+                else:
+                    cargs.append(a)
             return cfn(*cargs)
         call._keepalive = (ee, mod)  # prevent GC of the JIT engine
         return call
