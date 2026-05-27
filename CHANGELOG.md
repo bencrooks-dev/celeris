@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Nothing yet.
 
+## [0.2.0] - 2026-05-26
+
+### Added
+- Loop-fusion optimization pass (`fuse_loops`): adjacent `for` loops over the same iteration
+  space (identical loop var, start, stop, step) fuse into a single loop body — the "one pass,
+  no temporary" win — applied left-to-right to a fixpoint. Fusion runs only when a
+  conservative, provably-safe legality predicate holds (no `return` in either body; every
+  subscript of any array written in either body is exactly the loop variable; no shared scalar
+  dependence between the two bodies). Read-only arrays may use any index. Anything else is left
+  untouched (correct, just unfused). Wired into `optimize()` as `fold → fuse → DCE`; backends
+  need no changes since a fused loop is a normal `for` IR node, and the differential harness
+  cross-checks the fused output against the pure-Python oracle.
+
 ## [0.1.0] - 2026-05-26
 
 ### Added
@@ -35,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Differential correctness harness cross-checking every available backend against pure Python,
   a benchmark suite, runnable examples, and GitHub Actions CI.
 
-[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bencrooks-dev/celeris/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bencrooks-dev/celeris/releases/tag/v0.1.0

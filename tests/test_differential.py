@@ -59,6 +59,12 @@ def mod_loop(n: int) -> int:
         acc = acc + ((i - 5) % 3)    # negative operands: Python floored modulo
     return acc
 
+def chain(a: float, x: F64Array, t: F64Array, y: F64Array, n: int) -> None:
+    for i in range(n):
+        t[i] = a * x[i]
+    for i in range(n):
+        y[i] = t[i] + 1.0
+
 
 def _run_saxpy(f):
     x = np.arange(16, dtype=np.float64); y = np.ones(16, dtype=np.float64)
@@ -88,6 +94,13 @@ def _run_floordiv(f):
 def _run_mod(f):
     return np.int64(f(12))
 
+def _run_chain(f):
+    x = np.arange(16, dtype=np.float64)
+    t = np.zeros(16, dtype=np.float64)
+    y = np.zeros(16, dtype=np.float64)
+    f(2.0, x, t, y, 16)
+    return y
+
 
 # celeris's own backends. The global backend registry is process-wide and other
 # tests register throwaway backends into it (e.g. test_backends_registry's
@@ -105,6 +118,7 @@ CASES = [
     ("sum_evens", sum_evens, _run_sum_evens),
     ("floordiv_loop", floordiv_loop, _run_floordiv),
     ("mod_loop", mod_loop, _run_mod),
+    ("chain", chain, _run_chain),
 ]
 
 
@@ -130,3 +144,11 @@ def test_all_backends_agree_with_python(case):
         assert "sourcegen" in tested, f"{name}: sourcegen failed to compile a supported kernel"
     if importlib.util.find_spec("llvmlite") is not None:
         assert "llvm" in tested, f"{name}: llvm failed to compile a supported kernel"
+
+
+def test_chain_is_actually_fused():
+    from celeris.parser import parse_function
+    from celeris.passes import optimize
+    k = optimize(parse_function(chain))
+    fors = [s for s in k["body"] if s["op"] == "for"]
+    assert len(fors) == 1 and len(fors[0]["body"]) == 2, "chain must fuse to one loop"

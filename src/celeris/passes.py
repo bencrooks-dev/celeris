@@ -1,4 +1,5 @@
-"""celeris optimisation passes — constant folding and dead-code elimination.
+"""celeris optimisation passes — constant folding, loop fusion and dead-code
+elimination.
 
 These passes operate on the canonical IR dicts produced by :mod:`celeris.ir`.
 Every pass is *pure*: it never mutates its input and always returns a freshly
@@ -6,9 +7,11 @@ built tree, so callers can re-run a pass (idempotency) or compose passes freely.
 
 * :func:`fold_constants` — recursively evaluate ``binop`` / ``cmp`` nodes whose
   operands are all ``const``, collapsing them to a single ``const``.
+* :func:`fuse_loops` — merge adjacent ``for`` loops over the same iteration
+  space into one body when a conservative legality predicate proves it safe.
 * :func:`eliminate_dead_code` — drop ``assign`` statements to a local variable
   whose name is never read anywhere in the kernel.
-* :func:`optimize` — run folding then DCE over a whole kernel.
+* :func:`optimize` — run folding, then fusion, then DCE over a whole kernel.
 """
 
 import copy
@@ -211,12 +214,139 @@ def eliminate_dead_code(kernel):
     return work
 
 
+def _has_return(stmts) -> bool:
+    for s in stmts:
+        op = s["op"]
+        if op == "return":
+            return True
+        if op in ("for", "while") and _has_return(s["body"]):
+            return True
+        if op == "if" and (_has_return(s["then"]) or _has_return(s["else"])):
+            return True
+    return False
+
+
+def _collect(stmts, loopvar):
+    """Gather (written arrays, all array accesses, scalar writes, scalar reads)
+    for a loop body. Scalars exclude the loop variable. Array accesses are
+    (array_name, index_expr) pairs for every index node (read or write)."""
+    arr_writes, arr_access, s_writes, s_reads = set(), [], set(), set()
+
+    def read_expr(n):
+        k = n.get("k")
+        if k == "var":
+            if n["name"] != loopvar:
+                s_reads.add(n["name"])
+        elif k == "index":
+            arr_access.append((n["array"], n["index"]))
+            read_expr(n["index"])
+        elif k in ("binop", "cmp"):
+            read_expr(n["lhs"]); read_expr(n["rhs"])
+        elif k == "bool":
+            for a in n["args"]:
+                read_expr(a)
+        elif k == "call":
+            for a in n["args"]:
+                read_expr(a)
+        elif k == "cast":
+            read_expr(n["value"])
+        # const: leaf
+
+    def write_lval(t):
+        if t["k"] == "var":
+            if t["name"] != loopvar:
+                s_writes.add(t["name"])
+        else:  # index
+            arr_writes.add(t["array"])
+            arr_access.append((t["array"], t["index"]))
+            read_expr(t["index"])
+
+    def visit(ss):
+        for s in ss:
+            op = s["op"]
+            if op == "assign":
+                write_lval(s["target"]); read_expr(s["value"])
+            elif op == "augassign":
+                write_lval(s["target"])
+                if s["target"]["k"] == "var":   # augassign also READS the target
+                    if s["target"]["name"] != loopvar:
+                        s_reads.add(s["target"]["name"])
+                else:
+                    arr_access.append((s["target"]["array"], s["target"]["index"]))
+                read_expr(s["value"])
+            elif op == "for":
+                read_expr(s["start"]); read_expr(s["stop"]); read_expr(s["step"])
+                visit(s["body"])
+            elif op == "while":
+                read_expr(s["cond"]); visit(s["body"])
+            elif op == "if":
+                read_expr(s["cond"]); visit(s["then"]); visit(s["else"])
+            elif op == "return" and s["value"] is not None:
+                read_expr(s["value"])
+
+    visit(stmts)
+    return arr_writes, arr_access, s_writes, s_reads
+
+
+def _can_fuse(f1, f2) -> bool:
+    if f1.get("op") != "for" or f2.get("op") != "for":
+        return False
+    if not (f1["var"] == f2["var"] and f1["start"] == f2["start"]
+            and f1["stop"] == f2["stop"] and f1["step"] == f2["step"]):
+        return False                                  # (1) iteration space
+    var = f1["var"]
+    if _has_return(f1["body"]) or _has_return(f2["body"]):
+        return False                                  # (3) no return
+    w1, acc1, sw1, sr1 = _collect(f1["body"], var)
+    w2, acc2, sw2, sr2 = _collect(f2["body"], var)
+    written = w1 | w2
+    for arr, idx in acc1 + acc2:                       # (4) written arrays index==i
+        if arr in written and not (idx.get("k") == "var" and idx.get("name") == var):
+            return False
+    if (sw1 & (sw2 | sr2)) or (sw2 & (sw1 | sr1)):     # (5) scalar dependence
+        return False
+    return True
+
+
+def _fuse_block(stmts):
+    processed = [_fuse_stmt(s) for s in stmts]         # recurse into nested bodies first
+    out = []
+    for s in processed:
+        if (out and out[-1].get("op") == "for" and s.get("op") == "for"
+                and _can_fuse(out[-1], s)):
+            merged = dict(out[-1])
+            merged["body"] = _fuse_block(list(out[-1]["body"]) + list(s["body"]))
+            out[-1] = merged
+        else:
+            out.append(s)
+    return out
+
+
+def _fuse_stmt(s):
+    op = s.get("op")
+    if op in ("for", "while"):
+        s = dict(s); s["body"] = _fuse_block(s["body"]); return s
+    if op == "if":
+        s = dict(s); s["then"] = _fuse_block(s["then"]); s["else"] = _fuse_block(s["else"]); return s
+    return s
+
+
+def fuse_loops(kernel):
+    """Fuse adjacent same-iteration-space ``for`` loops into one, when provably
+    safe (see the legality predicate in the loop-fusion plan). Pure: never
+    mutates ``kernel``. A no-op whenever no adjacent pair is fusable."""
+    work = copy.deepcopy(kernel)
+    work["body"] = _fuse_block(work["body"])
+    return work
+
+
 def optimize(kernel):
-    """Fold constants then eliminate dead code over ``kernel``.
+    """Fold constants, fuse adjacent loops, then eliminate dead code over ``kernel``.
 
     Pure and idempotent: never mutates ``kernel`` and re-running ``optimize`` on
     its own output yields an equal kernel.
     """
     work = copy.deepcopy(kernel)
     work["body"] = fold_constants(work.get("body", []))
+    work = fuse_loops(work)
     return eliminate_dead_code(work)

@@ -105,9 +105,13 @@ is also available for embedding the IR pipeline in C++ hosts.
 moves more bytes than it does arithmetic — so a compiled celeris kernel lands at roughly
 NumPy-equivalent throughput, not dramatically faster. The architecture's intended win is
 **fusion**: collapsing a chain of array operations into one pass over memory, avoiding the
-temporaries NumPy allocates between each operation. (Loop fusion is a v1.0 roadmap item, not
-yet shipped — see [docs/ROADMAP.md](docs/ROADMAP.md).) We ship no fabricated benchmark
-numbers; run `benchmarks/benchmark.py` on your own hardware.
+temporaries NumPy allocates between each operation. As of v0.2.0 celeris ships this — its
+optimizer now fuses adjacent elementwise loops over the same iteration space into a single
+loop body (the "one pass, no temporary" win). Fusion is conservative: it only fires when a
+legality predicate proves the merge is safe, and otherwise leaves the loops untouched (still
+correct, just unfused). See [docs/ROADMAP.md](docs/ROADMAP.md) for what fusion does *not* yet
+cover (affine-offset dependence, tiling). We ship no fabricated benchmark numbers; run
+`benchmarks/benchmark.py` on your own hardware.
 
 ## Comparison to Numba
 
