@@ -79,6 +79,30 @@ Each pass is pure (never mutates its input) and the whole pipeline is idempotent
 is a normal `for` IR node, so backends need no changes; the differential harness cross-checks
 the fused output against the pure-Python interpreter oracle.
 
+## 2-D memory model (`ndim` + general strides)
+
+As of v0.5.0 the array markers extend beyond 1-D: `F64Array2D` (and its `F32`/`I64`/`I32`
+variants) annotate a 2-D array, lowering to the IR type `{"ptr": <elem>, "ndim": 2}`. The
+dimensionality lives on the *type* — a bare `{"ptr": ...}` is an implicit `ndim` of `1`, so 1-D
+kernels are byte-for-byte unchanged. An `a[i, j]` access parses to an `index` node carrying an
+`"indices"` list (one expression per dimension) instead of the 1-D single `"index"`, and the
+verifier requires the index arity to equal the array's `ndim` with each index integer-typed.
+
+The model uses **general strides**, so a 2-D array is never assumed contiguous. The native
+backends (source-gen and llvm) receive each `ndim ≥ 2` array as a **data pointer plus one
+`int64` element-stride per dimension** across the C ABI; the source-gen signature for a 2-D `a`
+is `(<elem>* a, int64_t a_s0, int64_t a_s1)`. A multi-dimensional index lowers to a single flat
+offset — `data[Σ_d idx_d · stride_d]` — and the marshalling layer fills the stride arguments at
+call time from the NumPy array's own `strides` (in elements, `arr.strides[d] // arr.itemsize`).
+Because the strides are supplied per-call, non-contiguous NumPy views (a slice of a larger
+buffer, or a `.T` transpose) compute correctly without forcing a copy. The pure-Python
+interpreter sidesteps the offset math and indexes the real NumPy array natively
+(`arr[tuple(indices)]`), so it stays the strided correctness oracle — the differential harness
+checks the native backends against it, including a transposed-view case. The golden-kernel tier
+has no 2-D templates in this release and declines any IR containing an N-D `index` node, so 2-D
+kernels route to source-gen or llvm. Slicing/row-views, broadcasting, and rank ≥ 3 are out of
+scope (see the roadmap).
+
 ## Tiered-dispatch model
 
 The hand-tuned kernel tier is **not** the primary codegen path — that doesn't scale. It is a

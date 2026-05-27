@@ -37,13 +37,44 @@ np.testing.assert_allclose(y, 2.0 * np.arange(1_000_000))
 If a function uses anything outside the supported subset, `@fast_runtime` does not raise — it
 quietly returns the original Python function so your code keeps working.
 
-## Supported subset (v0.1)
+As of v0.5.0 celeris also supports 2-D arrays with `a[i, j]` element indexing and **general
+strides**, so a row-sum over a NumPy view (a slice or a transpose) compiles and runs correctly
+without a copy:
+
+```python
+import numpy as np
+from celeris import fast_runtime
+from celeris.types import F64Array2D, F64Array
+
+
+@fast_runtime
+def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+    for i in range(m):
+        acc = 0.0
+        for j in range(k):
+            acc = acc + a[i, j]
+        y[i] = acc
+
+
+base = np.arange(12, dtype=np.float64).reshape(4, 3)
+a = base.T                              # non-contiguous transposed view (shape 3x4)
+y = np.zeros(3, dtype=np.float64)
+rowsum(a, y, 3, 4)                      # strides are passed at call time, so the view is correct
+np.testing.assert_allclose(y, a.sum(axis=1))
+```
+
+## Supported subset
 
 Inside a `@fast_runtime`-decorated region, celeris supports:
 
 - **Numeric scalars** — `i32`, `i64`, `f32`, `f64` (Python `int` → `i64`, `float` → `f64`).
 - **Typed 1-D arrays** — `F64Array`, `F32Array`, `I64Array`, `I32Array` (NumPy or any
   buffer supporting `__getitem__`/`__setitem__`).
+- **Typed 2-D arrays** *(v0.5)* — `F64Array2D`, `F32Array2D`, `I64Array2D`, `I32Array2D`,
+  with `a[i, j]` element indexing (exactly two integer indices). 2-D access uses **general
+  strides**: the native backends receive a data pointer plus one element-stride per dimension,
+  so non-contiguous NumPy views — slices of a larger buffer and `.T` transposes — compute
+  correctly without a copy.
 - **Control flow** — `for i in range(...)`, `while`, `if`/`else`. `for i in prange(...)` is a
   *parallel hint*: it parses identically to `range` but lets the source-gen backend thread the
   loop when it is provably independent (see **Parallelism** below).
@@ -56,9 +87,11 @@ Inside a `@fast_runtime`-decorated region, celeris supports:
 
 **Not supported** (any of these triggers transparent fallback to pure Python): classes,
 dicts/sets, exceptions, generators, closures over non-locals, dynamic or duck-typed calls
-(only direct calls to the intrinsic whitelist and `range` are allowed), recursion,
-multi-dimensional indexing (`a[i, j]`), and slicing (`a[i:j]`). Type annotations are
-mandatory on every parameter and on the return type.
+(only direct calls to the intrinsic whitelist and `range` are allowed), recursion, and
+slicing/row-views (`a[i:j]`, `a[i, :]`). 2-D indexing is supported (`a[i, j]`, exactly two
+integer indices), but **broadcasting and arrays of rank ≥ 3 are not yet supported** — a 2-D
+array must be indexed with exactly two indices, and a higher-rank array or any slice falls back
+to pure Python. Type annotations are mandatory on every parameter and on the return type.
 
 ## Install
 

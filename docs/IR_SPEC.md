@@ -12,8 +12,14 @@ Two discriminator keys are used by convention:
   `bool`, `call`, `cast`).
 
 **Every expression and l-value carries a `type`.** A type is either a scalar string —
-`"i32"`, `"i64"`, `"f32"`, `"f64"`, or `"void"` (kernel return only) — or a 1-D array type
-written `{"ptr": <scalar>}`, e.g. `{"ptr": "f64"}`.
+`"i32"`, `"i64"`, `"f32"`, `"f64"`, or `"void"` (kernel return only) — or an array (pointer)
+type. A 1-D array is written `{"ptr": <scalar>}`, e.g. `{"ptr": "f64"}`. An N-D array carries an
+explicit dimensionality: `{"ptr": <scalar>, "ndim": N}` (`N` an int ≥ 1), e.g.
+`{"ptr": "f64", "ndim": 2}` for a 2-D `f64` array. A bare `{"ptr": ...}` has an implicit `ndim`
+of `1`, so `{"ptr": "f64"}` and `{"ptr": "f64", "ndim": 1}` denote the same 1-D type;
+`types.ndim_of(t)` returns `0` for scalars, `1` for a bare pointer, and the explicit `ndim`
+otherwise. As of v0.5.0 the frontend emits `ndim` up to `2` (`F64Array2D`-style markers);
+rank ≥ 3 is reserved for a future release.
 
 ## Structural nodes
 
@@ -39,10 +45,15 @@ written `{"ptr": <scalar>}`, e.g. `{"ptr": "f64"}`.
 | Kind | Shape |
 | --- | --- |
 | **var** | `{"k": "var", "type": <type>, "name": str}` |
-| **index** | `{"k": "index", "type": <scalar>, "array": str, "index": <Expr>}` |
+| **index** (1-D) | `{"k": "index", "type": <scalar>, "array": str, "index": <Expr>}` |
+| **index** (N-D) | `{"k": "index", "type": <scalar>, "array": str, "indices": [<Expr>, ...]}` |
 
-The `index` target's `array` must name a parameter/local of type `{"ptr": T}`, and the node's
-`type` must equal that element type `T`.
+The `index` target's `array` must name a parameter/local of pointer type, and the node's `type`
+must equal that element type `T`. A 1-D index carries a single `"index"` expression and the
+array must have `ndim == 1`. An **N-D index** (introduced in v0.5.0, e.g. `a[i, j]`) instead
+carries an `"indices"` list whose length must equal the array's `ndim`; each index expression
+must be integer-typed. The two forms are mutually exclusive — a node has either `"index"` or
+`"indices"`, never both — so 1-D nodes are unchanged and fully back-compatible.
 
 ## Expressions (`"k"`)
 
@@ -50,7 +61,8 @@ The `index` target's `array` must name a parameter/local of type `{"ptr": T}`, a
 | --- | --- |
 | **const** | `{"k": "const", "type": <scalar>, "value": <number>}` |
 | **var** | `{"k": "var", "type": <type>, "name": str}` |
-| **index** | `{"k": "index", "type": <scalar>, "array": str, "index": <Expr>}` |
+| **index** (1-D) | `{"k": "index", "type": <scalar>, "array": str, "index": <Expr>}` |
+| **index** (N-D) | `{"k": "index", "type": <scalar>, "array": str, "indices": [<Expr>, ...]}` |
 | **binop** | `{"k": "binop", "op": str, "type": <scalar>, "lhs": <Expr>, "rhs": <Expr>}` |
 | **cmp** | `{"k": "cmp", "op": str, "type": "i1", "lhs": <Expr>, "rhs": <Expr>}` |
 | **bool** | `{"k": "bool", "op": "and" | "or" | "not", "type": "i1", "args": [<Expr>, ...]}` |
@@ -122,3 +134,36 @@ Compiled IR:
   ]
 }
 ```
+
+## N-D arrays and the strided calling convention
+
+A 2-D array parameter has type `{"ptr": <elem>, "ndim": 2}`, and an `a[i, j]` access compiles to
+an `index` node with an `"indices"` list:
+
+```json
+{
+  "k": "index", "type": "f64", "array": "a",
+  "indices": [
+    {"k": "var", "type": "i64", "name": "i"},
+    {"k": "var", "type": "i64", "name": "j"}
+  ]
+}
+```
+
+The native backends use **general strides**, so an N-D array is *not* assumed contiguous. Each
+N-D (`ndim ≥ 2`) array parameter is passed across the C ABI as a **data pointer followed by one
+`int64` stride per dimension, measured in elements** (not bytes). For a 2-D array `a` the
+generated function signature is `(<elem>* a, int64_t a_s0, int64_t a_s1, ...)`, and an
+`index` node with `indices = [e0, e1]` lowers to a flat offset
+
+```
+a[(e0) * a_s0 + (e1) * a_s1]
+```
+
+i.e. `data[Σ_d idx_d · stride_d]`. The marshalling layer fills the stride arguments at call time
+from the NumPy array's own `strides` (`arr.strides[d] // arr.itemsize`), so a non-contiguous
+view — a slice of a larger buffer or a `.T` transpose — supplies the right strides and computes
+correctly without a copy. 1-D arrays keep the original single-pointer convention (no stride
+arguments). The pure-Python interpreter ignores this convention entirely and indexes the real
+NumPy array with `arr[tuple(indices)]`, making it the strided oracle for the differential
+harness.
