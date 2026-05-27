@@ -20,7 +20,7 @@ contract with its neighbours, so any stage can be read, tested, or replaced in i
   │ IR + ANALYSIS                                               │
   │   ir.py        node constructors, schema, dumps/loads       │
   │   verifier.py  independent structural + type check          │
-  │   passes.py    constant folding, dead-code elimination      │
+  │   passes.py    constant folding, loop fusion, dead-code elim │
   └───────────────────────────────────────────────────────────┘
                               │  verified, optimized IR
                               ▼
@@ -44,6 +44,28 @@ The frontend produces a typed IR (a plain JSON-serializable dict tree, see
 [IR_SPEC.md](IR_SPEC.md)). The verifier re-checks that IR from scratch — it never trusts the
 parser — because the IR is the trust boundary handed to native code. Optimization passes then
 rewrite the IR before it reaches a backend.
+
+## Optimizer pass order
+
+`optimize()` runs three pure passes in a fixed order — `fold → fuse → DCE`:
+
+1. **Constant folding** (`fold_constants`) — recursively collapse `binop`/`cmp` nodes whose
+   operands are all `const` into a single `const`, simplifying the tree fusion then analyzes.
+2. **Loop fusion** (`fuse_loops`) — merge adjacent `for` loops over the same iteration space
+   into one loop body, applied left-to-right to a fixpoint (so a run of three fusable loops
+   collapses to one). It is a no-op unless a conservative legality predicate proves the merge
+   safe: **two adjacent `for` loops fuse iff they share an identical iteration space (var,
+   start, stop, step), neither body contains a `return`, every subscript of any array *written*
+   in either body is exactly the loop variable (read-only arrays may use any index), and there
+   is no shared scalar dependence between the bodies** (`writes(L1) ∩ refs(L2) = ∅` and
+   `writes(L2) ∩ refs(L1) = ∅`, excluding the loop var). Anything that fails the predicate is
+   left untouched — correct, just unfused.
+3. **Dead-code elimination** (`eliminate_dead_code`) — drop `assign` statements to a local
+   variable whose name is never read anywhere in the (now-fused) kernel.
+
+Each pass is pure (never mutates its input) and the whole pipeline is idempotent. A fused loop
+is a normal `for` IR node, so backends need no changes; the differential harness cross-checks
+the fused output against the pure-Python interpreter oracle.
 
 ## Tiered-dispatch model
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "celeris"
-version = "0.1.0"
+version = "0.2.0"
 description = "A readable, restricted re-implementation of the Numba architecture: a JIT compiler for a numeric subset of Python."
 readme = "README.md"
 requires-python = ">=3.10"
