@@ -101,6 +101,48 @@ the portable reference; the original Python function is the ultimate safety net.
 This mirrors how MKL / oneDNN / cuDNN ship hand-tuned kernels for known shapes and fall back to a
 general path otherwise, and it gives a clean A/B harness (golden vs generic vs reference).
 
+## Parallel dispatch (`prange`)
+
+`for i in prange(...)` parses identically to `range` but sets `parallel: true` on the `for` IR
+node — a hint, not a guarantee. The tiered dispatch routes a parallel loop to the one backend
+that can act on the hint safely:
+
+- **Golden kernels** (`kernels.py`) **decline** parallel loops — `matches()` returns `False`
+  via `ir.has_parallel_loop(...)` — so a `prange` kernel never matches a (serial) golden template.
+- **llvm** (`llvm.py`) **declines** parallel loops — `compile()` raises `CompileError` when
+  `has_parallel_loop(...)` is true, since that backend lowers serially.
+- **C++ source-gen** (`sourcegen.py`) is therefore the backend that handles parallel loops, and
+  it emits a `std::thread`-chunked loop **only** when the loop is provably independent. The
+  interpreter reference (`interpreter.py`) ignores the flag and runs every loop serially, which
+  makes it the serial oracle the differential harness checks the threaded output against.
+
+The independence predicate lives in `sourcegen._is_parallelizable(node)` and requires **all** of:
+
+1. the node is marked `parallel` (it came from `prange`);
+2. unit positive step — `step` is the integer constant `1` (`celeris_floordiv`/negative/variable
+   steps abandon the simple chunking premise);
+3. no `return` anywhere in the body (`_has_return`);
+4. no scalar writes in the body — via `passes._collect`, the set of written scalar names must be
+   empty, which rules out reductions (`acc = acc + x[i]`) and loop-carried temporaries;
+5. every array *write* is indexed at exactly the loop variable `i` (offset writes like
+   `y[i+1] = …` are rejected); array *reads* may use any index.
+
+When the predicate holds, `_emit_parallel_for` emits a guarded threaded loop: if the trip count
+`hi - lo < 4096` it runs the body in a single serial loop (avoiding thread-spawn overhead);
+otherwise it splits `[lo, hi)` into contiguous chunks across `std::thread::hardware_concurrency()`
+workers, clamped to at most 8, each running a serial sub-loop, and joins them. Each worker thread
+captures the array pointers and scalar parameters by value (`[=]`); because the predicate
+guarantees disjoint writes (each element written once, at its own `i`) and no shared mutable
+scalar, the chunks are race-free and the threaded result equals the serial one. Any loop that
+fails the predicate falls through to the ordinary serial `for` emitter — correct, just not
+threaded. The prelude gains `<thread>`, `<vector>`, `<algorithm>` and the `clang++` invocation
+passes `-pthread`. Loop fusion (`_can_fuse`) only merges two loops when their `parallel` flags
+match, so fusing never silently drops or invents the hint.
+
+This is intentionally narrow: it threads only embarrassingly-parallel elementwise loops.
+Parallel reductions (atomics / per-thread partials), offset and non-unit-step parallel loops,
+parallelism in the llvm backend, and OpenMP/GPU backends are out of scope (see the roadmap).
+
 ## Two distinct native layers (do not conflate)
 
 - **(A) Runtime JIT backends** — Python-driven, shell out to `clang` at runtime, load via
@@ -114,7 +156,7 @@ general path otherwise, and it gives a clean A/B harness (golden vs generic vs r
 
 | Project | What it is | How celeris differs |
 | --- | --- | --- |
-| **Numba** | Production LLVM JIT for a large NumPy/Python subset, type inference, `prange`, CUDA. | celeris is a readable re-implementation of the same *architecture* at a fraction of the scope: mandatory annotations, 1-D arrays only, no GPU, no threads. |
+| **Numba** | Production LLVM JIT for a large NumPy/Python subset, type inference, `prange`, CUDA. | celeris is a readable re-implementation of the same *architecture* at a fraction of the scope: mandatory annotations, 1-D arrays only, no GPU. It ships a deliberately minimal `prange` — the source-gen backend threads only provably-independent elementwise loops, with no parallel reductions. |
 | **Cython** | Ahead-of-time Python→C transpiler with its own superset syntax and a build step. | celeris is a runtime JIT on plain annotated Python; no separate syntax, no AOT build (the optional CMake core aside). |
 | **PyPy** | Whole-program tracing JIT for general Python via meta-tracing. | celeris compiles only explicitly-marked numeric kernels and falls back to CPython for everything else; far narrower, far simpler. |
 | **Mojo** | A new language (Python superset) with its own MLIR-based compiler and runtime. | celeris is not a language; it is a library that compiles a subset of *existing* Python. |

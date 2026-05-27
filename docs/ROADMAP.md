@@ -8,7 +8,7 @@ keeps the existing public API (`@fast_runtime`, `celeris.types`) stable.
 | **v0.1** | Frontend + reference | AST parser & subset validator, typed JSON IR with verifier and constant-fold/DCE passes, pure-Python interpreter backend, `@fast_runtime` with cache + graceful Python fallback. The whole pipeline runs end to end with no native dependencies. |
 | **v0.2** | Typed IR + C++ source-gen + loop fusion | IR → C++ emitter, runtime `clang++ -O3` compile, `ctypes` load and marshaling, on-disk per-kernel cache (`~/.celeris_cache/`). First real speedups. **Shipped (v0.2.0):** the provably-safe loop-fusion pass — adjacent elementwise loops over the same iteration space fuse into one body (`fold → fuse → DCE`), the "one pass, no temporary" win. |
 | **v0.3** | Affine-offset fusion | **Shipped (v0.3.0):** the fusion legality check generalizes from "every written subscript is exactly the loop variable" to **constant affine offsets** (`a[i ± c]`, `c` an integer literal) via a provably-safe `cy ≤ cx` dependence test on unit-step loops — a strict superset of the v0.2.0 rule. A producer at `t[i+1]` feeding a consumer at `t[i]` now fuses; forward-read dependences, variable offsets, and non-unit step still decline. (The standalone C++ core and `pybind11` production binding, built via CMake, shipped earlier in the v0.1 line.) |
-| **v0.4** | LLVM ORC backend | Optional `llvmlite` in-process JIT: structured-control-flow → SSA lowering with PHI nodes for loop induction variables, opt-level 2/3 pipeline, ORC/MCJIT execution. Exercised by a dedicated CI job. |
+| **v0.4** | `prange` threaded parallelism | **Shipped (v0.4.0):** `for i in prange(n)` marks a loop `parallel` (a hint), and the C++ source-gen backend runs it with `std::thread` chunking when it can *prove* independence — unit positive step, no `return`, no scalar writes (so no reductions), every array write at exactly `i` — and the trip count is at least 4096 iterations; everything else falls back to serial, correct by construction. The interpreter and llvm backends run serial; the golden-kernel and llvm backends decline parallel loops so a `prange` kernel routes to the threaded source-gen path. Correctness is enforced by the differential harness (threaded output == serial interpreter oracle). (The original v0.4 "LLVM ORC backend" idea is moot — the optional `llvmlite` in-process JIT shipped back in the v0.1 line.) |
 | **v0.5** | Tensor memory model | Multi-dimensional arrays, strides, and basic slicing; promotes the array markers beyond 1-D and lays groundwork for tiling passes. |
 | **v1.0** | Stable kernel compiler | Stabilized IR schema and public API, the golden-kernel registry as a documented extension point, the remaining fusion extensions (variable-offset and non-unit-step dependence analysis) and loop tiling/blocking, and a published, semver-guaranteed release. |
 
@@ -24,10 +24,14 @@ honest about what it is:
   literal), non-unit / negative step, and multi-array broadcasting are still intentionally
   *declined* (they fall back to leaving the loops unfused) and remain future fusion extensions.
 - Loop tiling / blocking (future optimization pass).
-- `prange` / multi-threading (future milestone).
+- **Parallel reductions and richer parallel loops.** The shipped v0.4.0 `prange` threads only
+  provably-independent, unit-step, elementwise loops via the source-gen backend. Parallel
+  reductions (atomics / per-thread partials), offset-write and non-unit-step parallel loops, and
+  parallelism inside the llvm backend are intentionally *declined* (they fall back to serial) and
+  remain future extensions.
+- OpenMP / GPU backends.
 - Recursion and a general call graph between compiled kernels.
 - A persistent on-disk kernel cache shared across processes.
-- GPU backends.
 - PyPI publishing (installed from source / GitHub during this line of work).
 
 If and when these land, they will get their own roadmap entry; until then, anything outside the
