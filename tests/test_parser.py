@@ -1,6 +1,6 @@
 import pytest
 from celeris.parser import parse_function
-from celeris.types import F64Array
+from celeris.types import F64Array, prange
 from celeris.errors import UnsupportedFeature
 
 def test_saxpy_ir():
@@ -85,3 +85,25 @@ def test_cmp_result_returned_as_int_is_cast():
         return c
     irk = parse_function(f)
     assert irk["body"][-1]["value"]["type"] == "i64"
+
+
+def test_prange_marks_parallel():
+    def k(x: F64Array, y: F64Array, n: int) -> None:
+        for i in prange(n):
+            y[i] = x[i]
+    irk = parse_function(k)
+    assert irk["body"][0]["op"] == "for" and irk["body"][0].get("parallel") is True
+
+def test_range_is_not_parallel():
+    def k(x: F64Array, y: F64Array, n: int) -> None:
+        for i in range(n):
+            y[i] = x[i]
+    irk = parse_function(k)
+    assert not irk["body"][0].get("parallel", False)
+
+def test_prange_three_arg():
+    def k(x: F64Array, n: int) -> None:
+        for i in prange(0, n, 1):
+            x[i] = x[i]
+    irk = parse_function(k)
+    assert irk["body"][0]["op"] == "for" and irk["body"][0].get("parallel") is True

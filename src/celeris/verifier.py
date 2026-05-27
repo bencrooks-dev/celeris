@@ -140,6 +140,10 @@ def _verify_augassign(s, syms) -> None:
 def _verify_for(s, syms) -> None:
     if not isinstance(s.get("var"), str):
         raise VerifyError("for loop 'var' must be a string")
+    # 'parallel' is an optional hint (set for prange loops); if present it must
+    # be a bool. prange is semantically identical to range, so no other gate.
+    if "parallel" in s and not isinstance(s["parallel"], bool):
+        raise VerifyError(f"for loop 'parallel' must be a bool, got {s['parallel']!r}")
     for bound in ("start", "stop", "step"):
         if bound not in s:
             raise VerifyError(f"for loop missing '{bound}'")

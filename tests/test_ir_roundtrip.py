@@ -29,3 +29,19 @@ def test_assign_and_if():
     assert a == {"op": "assign", "target": {"k": "var", "name": "s", "type": "f64"}, "value": {"k": "const", "type": "f64", "value": 0.0}}
     b = ir.if_(ir.cmp("<", ir.var("i", "i64"), ir.const("i64", 3)), [], [])
     assert b["op"] == "if" and "then" in b and "else" in b
+
+
+def test_for_parallel_flag():
+    import celeris.ir as ir
+    f = ir.for_("i", ir.const("i64", 0), ir.var("n", "i64"), ir.const("i64", 1), [], parallel=True)
+    assert f["parallel"] is True
+    f2 = ir.for_("i", ir.const("i64", 0), ir.var("n", "i64"), ir.const("i64", 1), [])
+    assert f2["parallel"] is False
+
+def test_has_parallel_loop():
+    import celeris.ir as ir
+    par = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1), [], parallel=True)
+    ser = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1), [])
+    assert ir.has_parallel_loop(ir.kernel("k", [], "void", [par])) is True
+    assert ir.has_parallel_loop(ir.kernel("k", [], "void", [ser])) is False
+    assert ir.has_parallel_loop(ir.kernel("k", [], "void", [ir.if_(ir.cmp("<", ir.const("i64",0), ir.const("i64",1)), [par], [])])) is True

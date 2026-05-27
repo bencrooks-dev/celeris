@@ -87,9 +87,27 @@ def augassign(binop, target, value):
     return {"op": "augassign", "binop": binop, "target": target, "value": value}
 
 
-def for_(var, start, stop, step, body):
-    """Counted loop ``for var in range(start, stop, step): body``."""
-    return {"op": "for", "var": var, "start": start, "stop": stop, "step": step, "body": body}
+def for_(var, start, stop, step, body, parallel=False):
+    """Counted loop ``for var in range(start, stop, step): body``.
+
+    ``parallel`` is a hint (set by the parser for ``prange`` loops) that the
+    loop iterations are intended to run independently; backends may execute the
+    loop in parallel when they can prove independence, and otherwise fall back
+    to serial. The flag is always emitted as a ``bool``.
+    """
+    return {"op": "for", "var": var, "start": start, "stop": stop, "step": step,
+            "body": body, "parallel": bool(parallel)}
+
+
+def has_parallel_loop(node) -> bool:
+    """True if any ``for`` node anywhere in ``node`` (kernel/stmt/list) is parallel."""
+    if isinstance(node, dict):
+        if node.get("op") == "for" and node.get("parallel"):
+            return True
+        return any(has_parallel_loop(v) for v in node.values())
+    if isinstance(node, list):
+        return any(has_parallel_loop(x) for x in node)
+    return False
 
 
 def while_(cond, body):

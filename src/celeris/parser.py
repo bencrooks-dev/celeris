@@ -46,7 +46,7 @@ class _Validator(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         if not isinstance(node.func, ast.Name):
             raise UnsupportedFeature("only direct calls to intrinsics/range allowed")
-        if node.func.id not in _INTRINSICS and node.func.id != "range":
+        if node.func.id not in _INTRINSICS and node.func.id not in ("range", "prange"):
             raise UnsupportedFeature(
                 f"call to '{node.func.id}' not in intrinsic whitelist")
         if node.keywords:
@@ -154,10 +154,12 @@ class _IRBuilder:
 
     def _for(self, s: ast.For):
         if not (isinstance(s.iter, ast.Call) and isinstance(s.iter.func, ast.Name)
-                and s.iter.func.id == "range"):
-            raise UnsupportedFeature("only 'for i in range(...)' is supported")
+                and s.iter.func.id in ("range", "prange")):
+            raise UnsupportedFeature("only 'for i in range(...)'/'prange(...)' is supported")
         if not isinstance(s.target, ast.Name):
             raise UnsupportedFeature("for-target must be a single name")
+        fn_name = s.iter.func.id
+        parallel = (fn_name == "prange")
         args = s.iter.args
         def ci(v):
             return ir.const("i64", v)
@@ -168,10 +170,10 @@ class _IRBuilder:
         elif len(args) == 3:
             start, stop, step = self._expr(args[0]), self._expr(args[1]), self._expr(args[2])
         else:
-            raise UnsupportedFeature("range takes 1-3 arguments")
+            raise UnsupportedFeature(f"{fn_name} takes 1-3 arguments")
         self.symtab[s.target.id] = "i64"
         body = [x for x in (self._stmt(b) for b in s.body) if x is not None]
-        return ir.for_(s.target.id, start, stop, step, body)
+        return ir.for_(s.target.id, start, stop, step, body, parallel=parallel)
 
     # -- expressions
     def _expr(self, e: ast.AST) -> dict:
