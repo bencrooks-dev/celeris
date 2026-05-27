@@ -226,10 +226,29 @@ def _has_return(stmts) -> bool:
     return False
 
 
+def _affine_offset(idx, loopvar):
+    """Constant offset c if idx is exactly `loopvar` (0) or `loopvar ± int-literal`
+    (±c); None for any non-affine subscript (2*i, i+k, i%2, nested index, ...)."""
+    if idx.get("k") == "var" and idx.get("name") == loopvar:
+        return 0
+    if idx.get("k") == "binop" and idx.get("op") in ("+", "-"):
+        lhs, rhs = idx["lhs"], idx["rhs"]
+        if (lhs.get("k") == "var" and lhs.get("name") == loopvar
+                and rhs.get("k") == "const" and isinstance(rhs.get("value"), int)):
+            c = int(rhs["value"])
+            return c if idx["op"] == "+" else -c
+        if (idx["op"] == "+" and rhs.get("k") == "var" and rhs.get("name") == loopvar
+                and lhs.get("k") == "const" and isinstance(lhs.get("value"), int)):
+            return int(lhs["value"])
+    return None
+
+
 def _collect(stmts, loopvar):
     """Gather (written arrays, all array accesses, scalar writes, scalar reads)
     for a loop body. Scalars exclude the loop variable. Array accesses are
-    (array_name, index_expr) pairs for every index node (read or write)."""
+    (array_name, index_expr, is_write) triples for every index node: the write
+    flag is True for store targets (index l-values and augassign index targets),
+    False for index reads."""
     arr_writes, arr_access, s_writes, s_reads = set(), [], set(), set()
 
     def read_expr(n):
@@ -238,7 +257,7 @@ def _collect(stmts, loopvar):
             if n["name"] != loopvar:
                 s_reads.add(n["name"])
         elif k == "index":
-            arr_access.append((n["array"], n["index"]))
+            arr_access.append((n["array"], n["index"], False))
             read_expr(n["index"])
         elif k in ("binop", "cmp"):
             read_expr(n["lhs"]); read_expr(n["rhs"])
@@ -258,7 +277,7 @@ def _collect(stmts, loopvar):
                 s_writes.add(t["name"])
         else:  # index
             arr_writes.add(t["array"])
-            arr_access.append((t["array"], t["index"]))
+            arr_access.append((t["array"], t["index"], True))
             read_expr(t["index"])
 
     def visit(ss):
@@ -272,7 +291,7 @@ def _collect(stmts, loopvar):
                     if s["target"]["name"] != loopvar:
                         s_reads.add(s["target"]["name"])
                 else:
-                    arr_access.append((s["target"]["array"], s["target"]["index"]))
+                    arr_access.append((s["target"]["array"], s["target"]["index"], True))
                 read_expr(s["value"])
             elif op == "for":
                 read_expr(s["start"]); read_expr(s["stop"]); read_expr(s["step"])
@@ -289,6 +308,29 @@ def _collect(stmts, loopvar):
 
 
 def _can_fuse(f1, f2) -> bool:
+    """Conservative legality predicate for fusing two adjacent ``for`` loops.
+
+    Condition (4) — affine-offset dependence test. When the loop step is the
+    unit positive literal (``step == 1``), every subscript of a *written* array
+    must be a constant affine offset of the loop var (``i ± c``). With unit
+    stride the map ``i -> i + c`` is injective and contiguous, so each iteration
+    writes a distinct element and the iteration sweep reaches every integer in
+    range. For a written array, take any cross-loop access pair — L1 at offset
+    ``cx``, L2 at offset ``cy`` — with at least one write among them. In the
+    unfused program L1's whole sweep precedes L2's, so the dependence (flow /
+    anti / output) between element ``cx`` of L1's iteration and element ``cy``
+    of L2's runs in source order. Fusion interleaves them: within one fused
+    iteration ``i`` the L1 statement (touching ``i + cx``) runs before the L2
+    statement (touching ``i + cy``); across iterations ``i`` increases by one.
+    The fused order preserves the unfused dependence order exactly when the L2
+    access touches an element that L1 has already reached, i.e.
+    ``i + cy <= i + cx`` ⇔ ``cy <= cx`` for every such pair. Read-only arrays
+    carry no cross-loop dependence and are unrestricted. A non-affine subscript
+    of a written array is undecidable here, so we decline. When the step is not
+    the unit positive literal the contiguity premise of the derivation fails, so
+    we fall back to the strict exactly-``i`` rule (declining any written-array
+    offset).
+    """
     if f1.get("op") != "for" or f2.get("op") != "for":
         return False
     if not (f1["var"] == f2["var"] and f1["start"] == f2["start"]
@@ -300,11 +342,25 @@ def _can_fuse(f1, f2) -> bool:
     w1, acc1, sw1, sr1 = _collect(f1["body"], var)
     w2, acc2, sw2, sr2 = _collect(f2["body"], var)
     written = w1 | w2
-    for arr, idx in acc1 + acc2:                       # (4) written arrays index==i
-        if arr in written and not (idx.get("k") == "var" and idx.get("name") == var):
-            return False
-    if (sw1 & (sw2 | sr2)) or (sw2 & (sw1 | sr1)):     # (5) scalar dependence
-        return False
+    step = f1["step"]
+    step_unit_const = (step.get("k") == "const"
+                       and isinstance(step.get("value"), int) and step["value"] == 1)
+    if step_unit_const:
+        for arr in written:
+            l1 = [(_affine_offset(idx, var), iw) for (a, idx, iw) in acc1 if a == arr]
+            l2 = [(_affine_offset(idx, var), iw) for (a, idx, iw) in acc2 if a == arr]
+            if any(off is None for off, _ in l1 + l2):
+                return False                      # non-affine access to a written array
+            for cx, wx in l1:
+                for cy, wy in l2:
+                    if (wx or wy) and not (cy <= cx):
+                        return False              # would reorder a real dependence
+    else:
+        for a, idx, iw in acc1 + acc2:            # non-unit/var step: strict exactly-i
+            if a in written and not (idx.get("k") == "var" and idx.get("name") == var):
+                return False
+    if (sw1 & (sw2 | sr2)) or (sw2 & (sw1 | sr1)):
+        return False                              # (5) scalar dependence
     return True
 
 

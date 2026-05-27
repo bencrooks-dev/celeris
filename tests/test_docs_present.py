@@ -35,4 +35,14 @@ def test_changelog_mentions_loop_fusion():
 def test_version_bumped():
     import pathlib
     root = pathlib.Path(__file__).resolve().parents[1]
-    assert '0.2.0' in (root / "pyproject.toml").read_text()
+    assert '0.3.0' in (root / "pyproject.toml").read_text()
+
+def test_version_is_030():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    assert '0.3.0' in (root / "pyproject.toml").read_text()
+
+def test_changelog_mentions_affine():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    assert "affine" in (root / "CHANGELOG.md").read_text().lower()

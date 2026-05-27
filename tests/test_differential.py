@@ -65,6 +65,12 @@ def chain(a: float, x: F64Array, t: F64Array, y: F64Array, n: int) -> None:
     for i in range(n):
         y[i] = t[i] + 1.0
 
+def shifted_chain(a: float, x: F64Array, t: F64Array, y: F64Array, n: int) -> None:
+    for i in range(n):
+        t[i + 1] = a * x[i]
+    for i in range(n):
+        y[i] = t[i]
+
 
 def _run_saxpy(f):
     x = np.arange(16, dtype=np.float64); y = np.ones(16, dtype=np.float64)
@@ -101,6 +107,13 @@ def _run_chain(f):
     f(2.0, x, t, y, 16)
     return y
 
+def _run_shifted_chain(f):
+    x = np.arange(16, dtype=np.float64)
+    t = np.zeros(17, dtype=np.float64)   # size n+1 so t[i+1] and t[i] are in bounds
+    y = np.zeros(16, dtype=np.float64)
+    f(2.0, x, t, y, 16)
+    return y
+
 
 # celeris's own backends. The global backend registry is process-wide and other
 # tests register throwaway backends into it (e.g. test_backends_registry's
@@ -119,6 +132,7 @@ CASES = [
     ("floordiv_loop", floordiv_loop, _run_floordiv),
     ("mod_loop", mod_loop, _run_mod),
     ("chain", chain, _run_chain),
+    ("shifted_chain", shifted_chain, _run_shifted_chain),
 ]
 
 
@@ -152,3 +166,11 @@ def test_chain_is_actually_fused():
     k = optimize(parse_function(chain))
     fors = [s for s in k["body"] if s["op"] == "for"]
     assert len(fors) == 1 and len(fors[0]["body"]) == 2, "chain must fuse to one loop"
+
+
+def test_shifted_chain_is_fused():
+    from celeris.parser import parse_function
+    from celeris.passes import optimize
+    k = optimize(parse_function(shifted_chain))
+    fors = [s for s in k["body"] if s["op"] == "for"]
+    assert len(fors) == 1 and len(fors[0]["body"]) == 2

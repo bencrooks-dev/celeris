@@ -16,6 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Nothing yet.
 
+## [0.3.0] - 2026-05-27
+
+### Changed
+- Loop fusion now handles constant affine offsets (`a[i ± c]`, `c` an integer literal) on
+  written arrays, generalizing the v0.2.0 "subscript must be exactly the loop variable" rule
+  into a provably-safe superset. For two adjacent unit-step loops (`step == 1`), each written
+  array's cross-loop access pairs — L1 at offset `cx`, L2 at offset `cy`, with at least one
+  write among them — must satisfy `cy ≤ cx`; this is exactly the condition under which the
+  fused interleaving preserves the unfused flow/anti/output dependence order. So a producer at
+  `t[i+1]` followed by a consumer at `t[i]` fuses, while a forward-read dependence (`t[i]` then
+  `t[i+1]`) is declined. The pass stays conservative: variable offsets (`a[i+k]`), non-unit
+  step (and the strict exactly-`i` fallback it triggers), and multi-array broadcasting remain
+  out of scope and fall back to leaving the loops unfused. Read-only arrays are still
+  unrestricted, and a fused loop is still a normal `for` IR node — no backend changes — with
+  the differential harness cross-checking an in-bounds affine stencil chain against the
+  pure-Python oracle.
+
 ## [0.2.0] - 2026-05-26
 
 ### Added
@@ -48,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Differential correctness harness cross-checking every available backend against pure Python,
   a benchmark suite, runnable examples, and GitHub Actions CI.
 
-[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bencrooks-dev/celeris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bencrooks-dev/celeris/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bencrooks-dev/celeris/releases/tag/v0.1.0
