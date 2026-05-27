@@ -107,3 +107,42 @@ def test_prange_three_arg():
             x[i] = x[i]
     irk = parse_function(k)
     assert irk["body"][0]["op"] == "for" and irk["body"][0].get("parallel") is True
+
+
+def test_parse_2d_index():
+    from celeris.types import F64Array2D, F64Array
+    def k(a: F64Array2D, y: F64Array, m: int, kk: int) -> None:
+        for i in range(m):
+            acc = 0.0
+            for j in range(kk):
+                acc = acc + a[i, j]
+            y[i] = acc
+    irk = parse_function(k)
+    assert irk["params"][0]["type"] == {"ptr": "f64", "ndim": 2}
+    # the a[i,j] read is an index node with two indices
+    inner = irk["body"][0]["body"][1]["body"][0]   # the augassign acc = acc + a[i,j]
+    assert "indices" in inner["value"]["rhs"]
+
+
+def test_reject_2d_slice():
+    from celeris.types import F64Array2D
+    def bad(a: F64Array2D, n: int) -> float:
+        return a[0, 1:3]
+    with pytest.raises(UnsupportedFeature):
+        parse_function(bad)
+
+
+def test_reject_wrong_arity_2d():
+    from celeris.types import F64Array2D
+    def bad(a: F64Array2D, n: int) -> float:
+        return a[0]          # 2-D needs two indices (no row-view in v0.5)
+    with pytest.raises(UnsupportedFeature):
+        parse_function(bad)
+
+
+def test_reject_2d_index_on_1d():
+    from celeris.types import F64Array
+    def bad(a: F64Array, n: int) -> float:
+        return a[0, 1]       # 1-D takes one index
+    with pytest.raises(UnsupportedFeature):
+        parse_function(bad)

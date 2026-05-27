@@ -13,7 +13,7 @@ import textwrap
 
 from . import ir
 from .errors import TypeErrorIR, UnsupportedFeature
-from .types import annotation_to_type, is_float, is_int, unify_numeric
+from .types import annotation_to_type, is_float, is_int, ndim_of, unify_numeric
 
 _INTRINSICS = {"sqrt": "f64", "exp": "f64", "log": "f64", "sin": "f64",
                "cos": "f64", "fabs": "f64", "floor": "f64",
@@ -28,7 +28,7 @@ _ALLOWED_NODES = (
     ast.Module, ast.FunctionDef, ast.arguments, ast.arg,
     ast.For, ast.While, ast.If, ast.Assign, ast.AugAssign, ast.Return,
     ast.Expr, ast.Pass, ast.Call, ast.BinOp, ast.UnaryOp, ast.BoolOp,
-    ast.Compare, ast.Name, ast.Constant, ast.Subscript,
+    ast.Compare, ast.Name, ast.Constant, ast.Subscript, ast.Tuple,
     ast.Load, ast.Store, ast.Add, ast.Sub, ast.Mult, ast.Div,
     ast.FloorDiv, ast.Mod, ast.Pow, ast.USub, ast.UAdd, ast.Not,
     ast.And, ast.Or, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
@@ -54,10 +54,15 @@ class _Validator(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if isinstance(node.slice, ast.Tuple):
-            raise UnsupportedFeature("multi-dimensional indexing not supported in v0.1")
+        # Bare slices (e.g. ``a[1:5]``) are unsupported.
         if isinstance(node.slice, ast.Slice):
-            raise UnsupportedFeature("slicing not supported in v0.1")
+            raise UnsupportedFeature("slicing not supported")
+        # Tuple subscripts (``a[i, j]``) are multi-dim indexing and allowed,
+        # but a slice inside the tuple (e.g. ``a[i, :]``) is a row/column view,
+        # which is not supported.
+        if isinstance(node.slice, ast.Tuple):
+            if any(isinstance(elt, ast.Slice) for elt in node.slice.elts):
+                raise UnsupportedFeature("slicing within multi-dim index not supported")
         self.generic_visit(node)
 
 
@@ -76,11 +81,42 @@ class _IRBuilder:
             return annotation_to_type(node.id)
         raise UnsupportedFeature("annotation must be a simple name or None")
 
-    def _elem_type(self, array_name: str) -> str:
+    def _elem_and_ndim(self, array_name: str):
+        """Return ``(elem_type, ndim)`` for the array named ``array_name``."""
         t = self.symtab.get(array_name)
         if not (isinstance(t, dict) and "ptr" in t):
             raise TypeErrorIR(f"'{array_name}' is not an array")
-        return t["ptr"]
+        return t["ptr"], ndim_of(t)
+
+    def _index_read(self, node: ast.Subscript) -> dict:
+        """Build an index *read* expression for ``array[sub]`` (1-D or N-D)."""
+        arr = node.value.id
+        elem, ndim = self._elem_and_ndim(arr)
+        if isinstance(node.slice, ast.Tuple):
+            idxs = [self._expr(e) for e in node.slice.elts]
+            if len(idxs) != ndim:
+                raise UnsupportedFeature(
+                    f"array '{arr}' has {ndim} dim(s) but was indexed with {len(idxs)}")
+            return ir.index_nd(arr, idxs, elem)
+        if ndim != 1:
+            raise UnsupportedFeature(
+                "2-D array requires N indices; row-views unsupported")
+        return ir.index(arr, self._expr(_sub_index(node)), elem)
+
+    def _index_lval(self, node: ast.Subscript) -> dict:
+        """Build an index *l-value* for ``array[sub]`` (1-D or N-D)."""
+        arr = node.value.id
+        elem, ndim = self._elem_and_ndim(arr)
+        if isinstance(node.slice, ast.Tuple):
+            idxs = [self._expr(e) for e in node.slice.elts]
+            if len(idxs) != ndim:
+                raise UnsupportedFeature(
+                    f"array '{arr}' has {ndim} dim(s) but was indexed with {len(idxs)}")
+            return ir.lval_index_nd(arr, idxs, elem)
+        if ndim != 1:
+            raise UnsupportedFeature(
+                "2-D array requires N indices; row-views unsupported")
+        return ir.lval_index(arr, self._expr(_sub_index(node)), elem)
 
     # -- top level
     def build(self, fn: ast.FunctionDef) -> dict:
@@ -130,10 +166,8 @@ class _IRBuilder:
             lty = self.symtab[tgt.id]
             return ir.assign(ir.lval_var(tgt.id, lty), self._cast(val, lty))
         if isinstance(tgt, ast.Subscript):
-            arr = tgt.value.id
-            ety = self._elem_type(arr)
-            return ir.assign(ir.lval_index(arr, self._expr(_sub_index(tgt)), ety),
-                             self._cast(val, ety))
+            lval = self._index_lval(tgt)
+            return ir.assign(lval, self._cast(val, lval["type"]))
         raise UnsupportedFeature("unsupported assignment target")
 
     def _augassign(self, s: ast.AugAssign):
@@ -146,10 +180,9 @@ class _IRBuilder:
             return ir.augassign(op, ir.lval_var(s.target.id, ty),
                                 self._cast(self._expr(s.value), ty))
         if isinstance(s.target, ast.Subscript):
-            arr = s.target.value.id
-            ety = self._elem_type(arr)
-            return ir.augassign(op, ir.lval_index(arr, self._expr(_sub_index(s.target)), ety),
-                                self._cast(self._expr(s.value), ety))
+            lval = self._index_lval(s.target)
+            return ir.augassign(op, lval,
+                                self._cast(self._expr(s.value), lval["type"]))
         raise UnsupportedFeature("unsupported augmented-assignment target")
 
     def _for(self, s: ast.For):
@@ -190,8 +223,7 @@ class _IRBuilder:
                 raise TypeErrorIR(f"use of undefined name '{e.id}'")
             return ir.var(e.id, self.symtab[e.id])
         if isinstance(e, ast.Subscript):
-            arr = e.value.id
-            return ir.index(arr, self._expr(_sub_index(e)), self._elem_type(arr))
+            return self._index_read(e)
         if isinstance(e, ast.BinOp):
             l, r = self._expr(e.left), self._expr(e.right)
             ty = unify_numeric(l["type"], r["type"])

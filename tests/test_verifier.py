@@ -276,3 +276,21 @@ def test_true_division_f64_passes():
     k = ir.kernel("k", [ir.param("a","i64"), ir.param("b","i64")], "f64",
         [ir.ret(ir.binop("/","f64", ir.var("a","i64"), ir.var("b","i64")))])
     verify_ir(k)  # no raise (true division typed f64 over int operands is valid)
+
+
+def test_verify_2d_index_ok():
+    import celeris.ir as ir
+    from celeris.verifier import verify_ir
+    k = ir.kernel("k", [ir.param("a", {"ptr":"f64","ndim":2}), ir.param("m","i64")], "f64",
+        [ir.ret(ir.index_nd("a", [ir.const("i64",0), ir.const("i64",1)], "f64"))])
+    verify_ir(k)
+
+
+def test_verify_2d_wrong_arity_rejected():
+    import celeris.ir as ir
+    import pytest
+    from celeris.verifier import VerifyError, verify_ir
+    k = ir.kernel("k", [ir.param("a", {"ptr":"f64","ndim":2})], "f64",
+        [ir.ret(ir.index_nd("a", [ir.const("i64",0)], "f64"))])  # 1 index for 2-D
+    with pytest.raises(VerifyError):
+        verify_ir(k)

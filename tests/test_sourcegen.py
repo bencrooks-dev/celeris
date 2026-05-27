@@ -144,3 +144,32 @@ def test_sourcegen_prange_reduction_stays_serial():
     fn = SourceGenBackend().compile(parse_function(psum))
     x = np.arange(100, dtype=np.float64)
     assert abs(fn(x, 100) - x.sum()) < 1e-9  # serial fallback correct
+
+
+def test_sourcegen_2d_contiguous():
+    from celeris.types import F64Array2D, F64Array
+    def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+        for i in range(m):
+            acc = 0.0
+            for j in range(k):
+                acc = acc + a[i, j]
+            y[i] = acc
+    fn = SourceGenBackend().compile(parse_function(rowsum))
+    a = np.arange(12, dtype=np.float64).reshape(3, 4)
+    y = np.zeros(3, dtype=np.float64); fn(a, y, 3, 4)
+    np.testing.assert_allclose(y, a.sum(axis=1))
+
+def test_sourcegen_2d_transposed_view_strides():
+    from celeris.types import F64Array2D, F64Array
+    def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+        for i in range(m):
+            acc = 0.0
+            for j in range(k):
+                acc = acc + a[i, j]
+            y[i] = acc
+    fn = SourceGenBackend().compile(parse_function(rowsum))
+    base = np.arange(12, dtype=np.float64).reshape(4, 3)
+    a = base.T                     # non-contiguous view (shape 3x4)
+    assert not a.flags["C_CONTIGUOUS"]
+    y = np.zeros(3, dtype=np.float64); fn(a, y, 3, 4)
+    np.testing.assert_allclose(y, a.sum(axis=1))   # general strides => correct on a view

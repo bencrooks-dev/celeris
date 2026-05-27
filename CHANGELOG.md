@@ -16,6 +16,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Nothing yet.
 
+## [0.5.0] - 2026-05-27
+
+### Added
+- 2-D arrays — the first step of the tensor memory model. New parameter markers
+  `F64Array2D` / `F32Array2D` / `I64Array2D` / `I32Array2D` annotate a 2-D array; each lowers to
+  the IR type `{"ptr": <elem>, "ndim": 2}` (1-D arrays stay `{"ptr": <elem>}`, an implicit
+  `ndim` of `1`, so existing kernels are unchanged). Element access uses `a[i, j]`, which the
+  parser lowers to a new `index` IR node carrying an `"indices"` list (one expression per
+  dimension) instead of the 1-D single `"index"`; the verifier requires the index arity to equal
+  the array's `ndim` and each index to be integer-typed.
+- General strides — 2-D access is correct for **any** memory layout, not just contiguous arrays.
+  Native backends (C++ source-gen, llvm) receive each 2-D array as a data pointer **plus one
+  `int64` stride per dimension, measured in elements**, and lower `a[i, j]` to a flat offset
+  `data[Σ idx_d · stride_d]`. Because the strides are passed at call time from the NumPy array's
+  own `strides`, non-contiguous NumPy views — slices of a larger buffer, and `.T` transposes —
+  compute correctly without a copy. The pure-Python interpreter indexes the real NumPy array
+  natively (`arr[(i, j)]`), so it remains the strided oracle the differential harness checks the
+  native backends against, including a transposed-view case.
+
+### Changed
+- The golden-kernel tier declines any IR that contains an N-D `index` node (no 2-D golden
+  templates in this release), so 2-D kernels route to the source-gen or llvm backends.
+
+### Notes
+- Out of scope for v0.5.0 (tracked in the roadmap): slicing and row-views (`a[i, :]`, `a[1:5]`),
+  broadcasting, and arrays of rank ≥ 3 are still rejected and fall back to pure Python. A 2-D
+  access must use exactly two integer indices.
+
 ## [0.4.0] - 2026-05-27
 
 ### Added
@@ -88,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Differential correctness harness cross-checking every available backend against pure Python,
   a benchmark suite, runnable examples, and GitHub Actions CI.
 
-[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/bencrooks-dev/celeris/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bencrooks-dev/celeris/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bencrooks-dev/celeris/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bencrooks-dev/celeris/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bencrooks-dev/celeris/compare/v0.1.0...v0.2.0

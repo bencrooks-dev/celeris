@@ -11,7 +11,7 @@ from celeris.parser import parse_function
 from celeris.verifier import verify_ir
 from celeris.passes import optimize
 from celeris.backends import available_backends
-from celeris.types import F64Array
+from celeris.types import F64Array, F64Array2D
 
 
 def saxpy(a: float, x: F64Array, y: F64Array, n: int) -> None:
@@ -71,6 +71,13 @@ def shifted_chain(a: float, x: F64Array, t: F64Array, y: F64Array, n: int) -> No
     for i in range(n):
         y[i] = t[i]
 
+def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+    for i in range(m):
+        acc = 0.0
+        for j in range(k):
+            acc = acc + a[i, j]
+        y[i] = acc
+
 
 def _run_saxpy(f):
     x = np.arange(16, dtype=np.float64); y = np.ones(16, dtype=np.float64)
@@ -114,6 +121,12 @@ def _run_shifted_chain(f):
     f(2.0, x, t, y, 16)
     return y
 
+def _run_rowsum(f):
+    # CONTIGUOUS 2-D array: every backend (interpreter+sourcegen+llvm) compiles
+    # and must agree under the hardened CASES asserts below.
+    a = np.arange(12, dtype=np.float64).reshape(3, 4)
+    y = np.zeros(3, dtype=np.float64); f(a, y, 3, 4); return y
+
 
 # celeris's own backends. The global backend registry is process-wide and other
 # tests register throwaway backends into it (e.g. test_backends_registry's
@@ -133,6 +146,7 @@ CASES = [
     ("mod_loop", mod_loop, _run_mod),
     ("chain", chain, _run_chain),
     ("shifted_chain", shifted_chain, _run_shifted_chain),
+    ("rowsum", rowsum, _run_rowsum),
 ]
 
 
@@ -214,3 +228,62 @@ def test_prange_reduction_serial_fallback_correct():
     fn = SourceGenBackend().compile(parse_function(psum))
     x = np.arange(500, dtype=np.float64)
     assert abs(fn(x, 500) - x.sum()) < 1e-9
+
+
+def test_rowsum_transposed_view_all_backends_agree():
+    """A 2-D rowsum over a transposed (non-contiguous) NumPy view. The interpreter
+    indexes the real NumPy array (the oracle); the native backends use general
+    per-dim strides, so they must agree even though the view is not C-contiguous."""
+    from celeris.parser import parse_function
+    from celeris.verifier import verify_ir
+    from celeris.passes import optimize
+    from celeris.backends.interpreter import InterpreterBackend
+    from celeris.backends.sourcegen import SourceGenBackend
+    import shutil
+    k = parse_function(rowsum); verify_ir(k); k = optimize(k)
+    def run(fn):
+        base = np.arange(12, dtype=np.float64).reshape(4, 3)
+        a = base.T                                       # shape (3, 4), non-contiguous
+        assert not a.flags["C_CONTIGUOUS"]
+        y = np.zeros(3, dtype=np.float64); fn(a, y, 3, 4); return y
+    expected = run(rowsum)                               # plain-Python NumPy oracle
+    np.testing.assert_allclose(run(InterpreterBackend().compile(k)), expected, atol=1e-9)
+    if shutil.which("clang++"):
+        np.testing.assert_allclose(run(SourceGenBackend().compile(k)), expected, atol=1e-9)
+
+
+def scale2d(a: F64Array2D, s: float, m: int, k: int) -> None:
+    for i in range(m):
+        for j in range(k):
+            a[i, j] = a[i, j] * s + 1.0
+
+def aug2d(a: F64Array2D, s: float, m: int, k: int) -> None:
+    for i in range(m):
+        for j in range(k):
+            a[i, j] += s
+
+def test_2d_inplace_write_matches_oracle():
+    """In-place 2-D write through the strided lval path, validated against the
+    plain-Python oracle on BOTH a contiguous array and a transposed view.
+
+    ``scale2d`` uses a plain assign to a 2-D target (``a[i, j] = ...``);
+    ``aug2d`` exercises 2-D augmented assignment (``a[i, j] += ...``), which the
+    parser synthesises through ``lval_index_nd`` — the regression this guards."""
+    from celeris.parser import parse_function
+    from celeris.verifier import verify_ir
+    from celeris.passes import optimize
+    from celeris.backends.interpreter import InterpreterBackend
+    from celeris.backends.sourcegen import SourceGenBackend
+    import shutil
+    for pyfunc in (scale2d, aug2d):
+        k = parse_function(pyfunc); verify_ir(k); k = optimize(k)
+        def run(fn, make):
+            a = make(); fn(a, 3.0, a.shape[0], a.shape[1]); return a
+        for make in (lambda: np.arange(12, dtype=np.float64).reshape(3, 4),
+                     lambda: np.arange(12, dtype=np.float64).reshape(4, 3).T):
+            expected = run(pyfunc, make)                 # plain-Python oracle
+            np.testing.assert_allclose(
+                run(InterpreterBackend().compile(k), make), expected, atol=1e-9)
+            if shutil.which("clang++"):
+                np.testing.assert_allclose(
+                    run(SourceGenBackend().compile(k), make), expected, atol=1e-9)

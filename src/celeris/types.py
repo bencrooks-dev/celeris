@@ -49,6 +49,22 @@ class I32Array:
     """Marker annotation for a contiguous array of 32-bit integers."""
 
 
+class F64Array2D:
+    """Marker annotation for a 2-D array of 64-bit floats (general strides)."""
+
+
+class F32Array2D:
+    """Marker annotation for a 2-D array of 32-bit floats (general strides)."""
+
+
+class I64Array2D:
+    """Marker annotation for a 2-D array of 64-bit integers (general strides)."""
+
+
+class I32Array2D:
+    """Marker annotation for a 2-D array of 32-bit integers (general strides)."""
+
+
 # --- annotation name -> internal type ------------------------------------------
 
 _SCALAR = {"int": "i64", "float": "f64", "f32": "f32", "i32": "i32"}
@@ -57,6 +73,10 @@ _ARRAY = {
     "F32Array": {"ptr": "f32"},
     "I64Array": {"ptr": "i64"},
     "I32Array": {"ptr": "i32"},
+    "F64Array2D": {"ptr": "f64", "ndim": 2},
+    "F32Array2D": {"ptr": "f32", "ndim": 2},
+    "I64Array2D": {"ptr": "i64", "ndim": 2},
+    "I32Array2D": {"ptr": "i32", "ndim": 2},
 }
 
 # C type names per scalar, kept for backends that emit C source.
@@ -77,6 +97,18 @@ def annotation_to_type(name: str):
     if name == "None":
         return "void"
     raise UnsupportedFeature(f"unknown annotation '{name}'")
+
+
+def ndim_of(t) -> int:
+    """Number of dimensions of type ``t``.
+
+    Returns ``1`` for a 1-D pointer (``{"ptr": ...}``, the implicit default),
+    the explicit ``ndim`` for an N-D pointer (``{"ptr": ..., "ndim": N}``), and
+    ``0`` for any non-pointer (scalar) type.
+    """
+    if isinstance(t, dict) and "ptr" in t:
+        return t.get("ndim", 1)
+    return 0
 
 
 def is_float(t) -> bool:

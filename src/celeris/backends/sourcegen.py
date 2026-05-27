@@ -107,6 +107,10 @@ def _emit_expr(e) -> str:
     if k == "var":
         return e["name"]
     if k == "index":
+        if "indices" in e:
+            terms = " + ".join(f"({_emit_expr(ix)}) * {e['array']}_s{d}"
+                               for d, ix in enumerate(e["indices"]))
+            return f"{e['array']}[{terms}]"
         return f"{e['array']}[{_emit_expr(e['index'])}]"
     if k == "binop":
         l, r, op = _emit_expr(e["lhs"]), _emit_expr(e["rhs"]), e["op"]
@@ -142,6 +146,10 @@ def _emit_expr(e) -> str:
 def _emit_lval(t) -> str:
     if t["k"] == "var":
         return t["name"]
+    if "indices" in t:
+        terms = " + ".join(f"({_emit_expr(ix)}) * {t['array']}_s{d}"
+                           for d, ix in enumerate(t["indices"]))
+        return f"{t['array']}[{terms}]"
     return f"{t['array']}[{_emit_expr(t['index'])}]"
 
 
@@ -202,13 +210,18 @@ def _emit_stmts(stmts, ind="    ") -> str:
         if op == "assign":
             out.append(f"{ind}{_emit_lval(s['target'])} = {_emit_expr(s['value'])};")
         elif op == "augassign":
-            lv = _emit_lval(s["target"])
-            synth = {"k": "binop", "op": s["binop"], "type": s["target"]["type"],
-                     "lhs": {"k": "var" if s["target"]["k"] == "var" else "index",
-                             "type": s["target"]["type"],
-                             **({"name": s["target"]["name"]} if s["target"]["k"] == "var"
-                                else {"array": s["target"]["array"], "index": s["target"]["index"]})},
-                     "rhs": s["value"]}
+            tgt = s["target"]
+            lv = _emit_lval(tgt)
+            if tgt["k"] == "var":
+                lhs = {"k": "var", "type": tgt["type"], "name": tgt["name"]}
+            elif "indices" in tgt:
+                lhs = {"k": "index", "type": tgt["type"], "array": tgt["array"],
+                       "indices": tgt["indices"]}
+            else:
+                lhs = {"k": "index", "type": tgt["type"], "array": tgt["array"],
+                       "index": tgt["index"]}
+            synth = {"k": "binop", "op": s["binop"], "type": tgt["type"],
+                     "lhs": lhs, "rhs": s["value"]}
             out.append(f"{ind}{lv} = {_emit_expr(synth)};")
         elif op == "for":
             if _is_parallelizable(s):
@@ -237,9 +250,22 @@ def _emit_stmts(stmts, ind="    ") -> str:
     return "\n".join(out)
 
 
+def _param_decls(params) -> str:
+    parts = []
+    for p in params:
+        t, nm = p["type"], p["name"]
+        nd = t.get("ndim", 1) if isinstance(t, dict) and "ptr" in t else 0
+        if nd >= 2:
+            parts.append(f"{_CTYPE[t['ptr']]}* {nm}")
+            parts += [f"int64_t {nm}_s{d}" for d in range(nd)]
+        else:
+            parts.append(f"{_cty(t)} {nm}")
+    return ", ".join(parts)
+
+
 def emit_cpp(ir: dict) -> str:
     params = [p["name"] for p in ir["params"]]
-    sig = ", ".join(f"{_cty(p['type'])} {p['name']}" for p in ir["params"])
+    sig = _param_decls(ir["params"])
     locs: dict[str, str] = {}
     _collect_locals(ir["body"], set(params), locs)
     decls = "\n".join(f"    {cty} {name} = 0;" for name, cty in locs.items())
@@ -274,14 +300,27 @@ class SourceGenBackend:
                 raise CompileError(f"clang++ failed:\n{r.stderr}\n--- source ---\n{src}")
         lib = ctypes.CDLL(str(so))
         fn = getattr(lib, ir["name"])
-        fn.argtypes = [_ctypes_for(p["type"]) for p in ir["params"]]
+        argtypes = []
+        for p in ir["params"]:
+            t = p["type"]
+            nd = t.get("ndim", 1) if isinstance(t, dict) and "ptr" in t else 0
+            if nd >= 2:
+                argtypes.append(_ctypes_for(t))
+                argtypes += [ctypes.c_int64] * nd
+            else:
+                argtypes.append(_ctypes_for(t))
+        fn.argtypes = argtypes
         fn.restype = _ctypes_for(ir["ret"])
         ptypes = [p["type"] for p in ir["params"]]
 
         def call(*args):
             cargs = []
             for t, a in zip(ptypes, args):
-                if isinstance(t, dict) and "ptr" in t:
+                nd = t.get("ndim", 1) if isinstance(t, dict) and "ptr" in t else 0
+                if nd >= 2:
+                    cargs.append(a.ctypes.data_as(_ctypes_for(t)))
+                    cargs += [ctypes.c_int64(a.strides[d] // a.itemsize) for d in range(nd)]
+                elif isinstance(t, dict) and "ptr" in t:
                     cargs.append(a.ctypes.data_as(_ctypes_for(t)))
                 else:
                     cargs.append(a)

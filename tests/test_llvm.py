@@ -76,3 +76,19 @@ def test_llvm_declines_parallel_loops():
             y[i] = a * x[i] + y[i]
     with pytest.raises(CompileError):
         LLVMBackend().compile(parse_function(psaxpy))
+
+
+def test_llvm_2d_transposed_view():
+    from celeris.types import F64Array2D, F64Array
+    from celeris.parser import parse_function
+    def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+        for i in range(m):
+            acc = 0.0
+            for j in range(k):
+                acc = acc + a[i, j]
+            y[i] = acc
+    fn = LLVMBackend().compile(parse_function(rowsum))
+    base = np.arange(12, dtype=np.float64).reshape(4, 3)
+    a = base.T
+    y = np.zeros(3, dtype=np.float64); fn(a, y, 3, 4)
+    np.testing.assert_allclose(y, a.sum(axis=1))

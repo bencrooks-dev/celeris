@@ -38,6 +38,16 @@ def index(array, index, type):
     return {"k": "index", "type": type, "array": array, "index": index}
 
 
+def index_nd(array, indices, type):
+    """N-D array element read: ``array[indices[0], indices[1], ...]``.
+
+    ``type`` is the element type. The presence of the ``"indices"`` key (a list)
+    rather than a single ``"index"`` distinguishes the multi-dim node from the
+    1-D :func:`index` node, keeping the 1-D path byte-for-byte unchanged.
+    """
+    return {"k": "index", "type": type, "array": array, "indices": indices}
+
+
 def binop(op, type, lhs, rhs):
     """Binary arithmetic ``lhs op rhs`` producing ``type``."""
     return {"k": "binop", "op": op, "type": type, "lhs": lhs, "rhs": rhs}
@@ -73,6 +83,11 @@ def lval_var(name, type):
 def lval_index(array, index, type):
     """Assignment target: element ``array[index]`` of element ``type``."""
     return {"k": "index", "array": array, "type": type, "index": index}
+
+
+def lval_index_nd(array, indices, type):
+    """Assignment target: N-D element ``array[indices[0], ...]`` of ``type``."""
+    return {"k": "index", "array": array, "type": type, "indices": indices}
 
 
 # --- statements ----------------------------------------------------------------

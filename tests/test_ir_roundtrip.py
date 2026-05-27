@@ -45,3 +45,12 @@ def test_has_parallel_loop():
     assert ir.has_parallel_loop(ir.kernel("k", [], "void", [par])) is True
     assert ir.has_parallel_loop(ir.kernel("k", [], "void", [ser])) is False
     assert ir.has_parallel_loop(ir.kernel("k", [], "void", [ir.if_(ir.cmp("<", ir.const("i64",0), ir.const("i64",1)), [par], [])])) is True
+
+
+def test_index_nd():
+    import celeris.ir as ir
+    e = ir.index_nd("a", [ir.var("i","i64"), ir.var("j","i64")], "f64")
+    assert e == {"k":"index","type":"f64","array":"a",
+                 "indices":[{"k":"var","type":"i64","name":"i"},{"k":"var","type":"i64","name":"j"}]}
+    lv = ir.lval_index_nd("a", [ir.var("i","i64"), ir.var("j","i64")], "f64")
+    assert lv["k"] == "index" and lv["array"] == "a" and len(lv["indices"]) == 2

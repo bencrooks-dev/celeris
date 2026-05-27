@@ -70,3 +70,13 @@ def test_kernels_declines_parallel_loops():
         for i in prange(n):
             y[i] = a * x[i] + y[i]
     assert KernelBackend().matches(parse_function(psaxpy)) is False
+
+def test_kernels_declines_2d():
+    from celeris.types import F64Array2D, F64Array
+    def rowsum(a: F64Array2D, y: F64Array, m: int, k: int) -> None:
+        for i in range(m):
+            acc = 0.0
+            for j in range(k):
+                acc = acc + a[i, j]
+            y[i] = acc
+    assert KernelBackend().matches(parse_function(rowsum)) is False

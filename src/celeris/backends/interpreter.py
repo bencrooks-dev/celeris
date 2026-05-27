@@ -86,7 +86,10 @@ def _store(target, value, env):
     if target["k"] == "var":
         env[target["name"]] = value
     elif target["k"] == "index":
-        env[target["array"]][_eval(target["index"], env)] = value
+        if "indices" in target:
+            env[target["array"]][tuple(_eval(ix, env) for ix in target["indices"])] = value
+        else:
+            env[target["array"]][_eval(target["index"], env)] = value
     else:
         raise ValueError(f"interpreter: bad store target '{target['k']}'")
 
@@ -95,6 +98,8 @@ def _load_lval(target, env):
     if target["k"] == "var":
         return env[target["name"]]
     if target["k"] == "index":
+        if "indices" in target:
+            return env[target["array"]][tuple(_eval(ix, env) for ix in target["indices"])]
         return env[target["array"]][_eval(target["index"], env)]
     raise ValueError(f"interpreter: bad lvalue '{target['k']}'")
 
@@ -106,6 +111,8 @@ def _eval(e, env):
     if k == "var":
         return env[e["name"]]
     if k == "index":
+        if "indices" in e:
+            return env[e["array"]][tuple(_eval(ix, env) for ix in e["indices"])]
         return env[e["array"]][_eval(e["index"], env)]
     if k == "binop":
         return _apply(e["op"], _eval(e["lhs"], env), _eval(e["rhs"], env))

@@ -44,6 +44,21 @@ def _is_index(e) -> bool:
     return isinstance(e, dict) and e.get("k") == "index"
 
 
+def _contains_nd_index(node) -> bool:
+    """Recursively scan the IR for any N-D index node (one carrying "indices").
+
+    There are no 2-D golden kernels in v0.5, so the golden tier must decline any
+    IR containing an `index_nd` node and let it fall through to source-gen/llvm.
+    """
+    if isinstance(node, dict):
+        if node.get("k") == "index" and "indices" in node:
+            return True
+        return any(_contains_nd_index(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_contains_nd_index(v) for v in node)
+    return False
+
+
 def _match_saxpy(ir) -> bool:
     loop = _single_loop(ir)
     if not loop:
@@ -167,6 +182,10 @@ class KernelBackend:
     def matches(self, ir: dict) -> bool:
         # Parallel loops fall through to source-gen's threaded path.
         if has_parallel_loop(ir):
+            return False
+        # No 2-D golden kernels in v0.5: decline any N-D index_nd IR so it
+        # falls through to source-gen/llvm.
+        if _contains_nd_index(ir):
             return False
         return any(g.matches(ir) for g in REGISTRY.values())
 
