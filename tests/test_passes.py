@@ -186,3 +186,22 @@ def test_affine_output_dep_offset_fuses():
     k = _kernel([l1, l2]); k["params"].append(ir.param("t", {"ptr": "f64"}))
     out = fuse_loops(k)
     assert len([s for s in out["body"] if s["op"] == "for"]) == 1
+
+
+def test_fuse_two_parallel_loops_keeps_parallel():
+    l1 = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1),
+                 [_idx_assign("y", "x", ir.var("i","i64"))], parallel=True)
+    l2 = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1),
+                 [_idx_assign("z", "x", ir.var("i","i64"))], parallel=True)
+    k = _kernel([l1, l2])
+    out = fuse_loops(k)
+    fors = [s for s in out["body"] if s["op"] == "for"]
+    assert len(fors) == 1 and fors[0].get("parallel") is True
+
+def test_no_fuse_parallel_with_serial():
+    l1 = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1),
+                 [_idx_assign("y", "x", ir.var("i","i64"))], parallel=True)
+    l2 = ir.for_("i", ir.const("i64",0), ir.var("n","i64"), ir.const("i64",1),
+                 [_idx_assign("z", "x", ir.var("i","i64"))], parallel=False)
+    out = fuse_loops(_kernel([l1, l2]))
+    assert len([s for s in out["body"] if s["op"] == "for"]) == 2
