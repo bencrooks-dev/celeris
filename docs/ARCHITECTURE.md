@@ -55,11 +55,23 @@ rewrite the IR before it reaches a backend.
    into one loop body, applied left-to-right to a fixpoint (so a run of three fusable loops
    collapses to one). It is a no-op unless a conservative legality predicate proves the merge
    safe: **two adjacent `for` loops fuse iff they share an identical iteration space (var,
-   start, stop, step), neither body contains a `return`, every subscript of any array *written*
-   in either body is exactly the loop variable (read-only arrays may use any index), and there
-   is no shared scalar dependence between the bodies** (`writes(L1) ∩ refs(L2) = ∅` and
-   `writes(L2) ∩ refs(L1) = ∅`, excluding the loop var). Anything that fails the predicate is
-   left untouched — correct, just unfused.
+   start, stop, step), neither body contains a `return`, the written-array dependence test
+   below holds, and there is no shared scalar dependence between the bodies**
+   (`writes(L1) ∩ refs(L2) = ∅` and `writes(L2) ∩ refs(L1) = ∅`, excluding the loop var).
+   The written-array test (`_can_fuse` condition 4) generalizes the v0.2.0 "exactly the loop
+   variable" rule to **constant affine offsets** (`a[i ± c]`, `c` an integer literal): when the
+   step is the unit positive literal (`step == 1`), every subscript of an array *written* in
+   either body must parse to a constant offset of the loop var, and for each written array
+   every cross-loop access pair — L1 at offset `cx`, L2 at offset `cy`, with at least one write
+   among them — must satisfy `cy ≤ cx`. With unit stride `i ↦ i + c` is injective and
+   contiguous, so each element is written once and `cy ≤ cx` is exactly the condition that the
+   fused interleaving (L1's statement before L2's within each iteration `i`) preserves the
+   unfused flow/anti/output dependence order. A producer at `t[i+1]` feeding a consumer at
+   `t[i]` therefore fuses, whereas a forward-read dependence (`t[i]` then `t[i+1]`) is declined.
+   A non-affine subscript of a written array (variable offset `a[i+k]`, `2*i`, `i%2`, …) is
+   undecidable here and declines; a non-unit step abandons the contiguity premise and falls
+   back to the strict exactly-`i` rule. Read-only arrays carry no cross-loop dependence and may
+   use any index. Anything that fails the predicate is left untouched — correct, just unfused.
 3. **Dead-code elimination** (`eliminate_dead_code`) — drop `assign` statements to a local
    variable whose name is never read anywhere in the (now-fused) kernel.
 

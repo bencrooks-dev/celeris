@@ -106,12 +106,18 @@ moves more bytes than it does arithmetic — so a compiled celeris kernel lands 
 NumPy-equivalent throughput, not dramatically faster. The architecture's intended win is
 **fusion**: collapsing a chain of array operations into one pass over memory, avoiding the
 temporaries NumPy allocates between each operation. As of v0.2.0 celeris ships this — its
-optimizer now fuses adjacent elementwise loops over the same iteration space into a single
-loop body (the "one pass, no temporary" win). Fusion is conservative: it only fires when a
-legality predicate proves the merge is safe, and otherwise leaves the loops untouched (still
-correct, just unfused). See [docs/ROADMAP.md](docs/ROADMAP.md) for what fusion does *not* yet
-cover (affine-offset dependence, tiling). We ship no fabricated benchmark numbers; run
-`benchmarks/benchmark.py` on your own hardware.
+optimizer fuses adjacent loops over the same iteration space into a single loop body (the
+"one pass, no temporary" win). As of v0.3.0 the legality check generalizes from "every written
+subscript is exactly the loop variable" to **constant affine offsets** (`a[i ± c]`, `c` an
+integer literal): for two adjacent unit-step loops, a written array fuses when every cross-loop
+access pair satisfies `cy ≤ cx` (L1 offset `cx`, L2 offset `cy`), exactly the condition that
+preserves the unfused dependence order — so a producer at `t[i+1]` feeding a consumer at `t[i]`
+now fuses. Fusion stays conservative: it only fires when this predicate proves the merge safe,
+and otherwise leaves the loops untouched (still correct, just unfused). It deliberately
+declines forward-read dependences (`t[i]` then `t[i+1]`), variable offsets (`a[i+k]`), and
+non-unit-step loops. See [docs/ROADMAP.md](docs/ROADMAP.md) for what fusion does *not* yet
+cover (variable-offset and non-unit-step fusion, tiling). We ship no fabricated benchmark
+numbers; run `benchmarks/benchmark.py` on your own hardware.
 
 ## Comparison to Numba
 
